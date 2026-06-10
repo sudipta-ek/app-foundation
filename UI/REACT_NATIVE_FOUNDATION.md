@@ -3,9 +3,76 @@
 ## 1.1 React Native Foundation Scope
 **Objective**: Establish a robust, scalable, and maintainable React Native foundation supporting iOS, iPad, and future Android platforms with BFF-based architecture integration, enterprise-grade performance, and advanced features for airline operations.
 
+**Enterprise Focus**: Operational systems requiring real-time communication, event-driven architecture, and multi-team development support.
+
 ---
 
 ## FOUNDATION ARCHITECTURE OVERVIEW
+
+### Monorepo Strategy (Nx)
+**Purpose**: Single source of truth for React Native, React Desktop, and shared libraries
+
+**Recommended Structure:**
+```
+airline-platform/
+├── apps/
+│   ├── mobile/               # React Native iOS/Android
+│   ├── desktop/              # React Desktop
+│   └── api-gateway/          # Optional: Node.js gateway
+├── libs/
+│   ├── sdk/                  # Generated OpenAPI SDK
+│   ├── ui/                   # Shared design system
+│   ├── auth/                 # Authentication logic
+│   ├── realtime/             # WebSocket + Event handling
+│   ├── analytics/            # Analytics SDK
+│   ├── ai/                   # AI Gateway client
+│   ├── offline/              # Offline & sync logic
+│   └── shared/               # Common utilities
+├── tools/
+│   ├── design-tokens/        # Figma token generator
+│   ├── api-codegen/          # OpenAPI generator
+│   └── mock-server/          # MSW mock server
+└── docs/
+```
+
+**Benefits:**
+- ✅ Single dependency management
+- ✅ Shared component library
+- ✅ Code reuse between mobile & desktop
+- ✅ Unified testing strategy
+- ✅ Consistent design system
+
+---
+
+### Design System Governance
+**Purpose**: Single source of truth for UI across React Native and React Desktop
+
+**Architecture:**
+```
+Design Tokens (Figma)
+    ↓
+Design Token Repository
+    ↓
+Component Library (RN + Web)
+    ↓
+Storybook + Component Catalog
+```
+
+**Figma-to-Code Pipeline:**
+- Export tokens from Figma using tokens-studio plugin
+- Generate TypeScript, CSS, and React Native styles
+- Publish to npm registry
+- Version control all design system changes
+- Document breaking changes and deprecations
+
+**UI Governance:**
+- Design review process for new components
+- Version control for design system
+- Deprecation policy for old components
+- Breaking change notifications
+- Component usage metrics
+
+---
 
 ### React Native Version & Modern Features
 **React Native 0.80+** with advanced rendering capabilities:
@@ -13,474 +80,268 @@
 **Enabled Modules:**
 ```
 React Native 0.80+
-├── TurboModules (Native Module Bridge)
-│   └── Performance: 2-3x faster than old Native Modules
-├── Fabric Renderer (New Render Engine)
-│   └── Concurrent rendering, better layout performance
-└── JSI (JavaScript Interface)
-    └── Direct JS-to-Native communication (< 1ms latency)
+├── TurboModules
+├── Fabric Renderer
+└── JSI (< 1ms latency)
 ```
-
-**Configuration (Podfile/build.gradle):**
-```ruby
-# ios/Podfile
-post_install do |installer|
-  react_native_post_install(
-    installer,
-    config_path,
-    :fabric_enabled => true,
-    :turbomodule_enabled => true,
-    :jsi_enabled => true
-  )
-end
-```
-
-**Benefits for Airline Operations:**
-- Real-time boarding scan processing
-- High-frequency network operations
-- Native camera integration for passport scanning
-- NFC tag reading with minimal latency
 
 ---
 
 ### Native Bridge Architecture
-**Purpose**: Enable platform-specific functionality (Swift/Kotlin) while maintaining React Native UI layer
+**Purpose**: Enable platform-specific functionality (Swift/Kotlin)
 
-**Architecture Diagram:**
+**Native Capability Registry:**
 ```
-┌─────────────────────────────────────┐
-│     React Native (JavaScript)       │
-│  ├─ Navigation/UI                   │
-│  ├─ State Management                │
-│  ├─ API Integration                 │
-│  └─ Offline Queue                   │
-└──────────────┬──────────────────────┘
-               │
-      ┌────────▼─────────┐
-      │  Native Bridge   │
-      │  (TurboModules)  │
-      └────────┬─────────┘
-               │
-    ┌──────────┼──────────┬─────────────┐
-    │          │          │             │
-┌───▼───┐  ┌──▼──┐  ┌────▼────┐  ┌───▼────┐
-│Camera │  │ NFC │  │Biometric│  │Passport│
-│Module │  │Module   │Module   │  │Scanner │
-└───────┘  └─────┘  └─────────┘  └────────┘
-    │          │          │             │
-┌───▼───┐  ┌──▼──┐  ┌────▼────┐  ┌───▼────┐
-│Swift  │  │Swift│  │Swift    │  │Swift   │
-│Code   │  │Code │  │Code     │  │Code    │
-└───────┘  └─────┘  └─────────┘  └────────┘
-```
+Current:
+├── Camera Module
+├── NFC Reader
+├── Biometric Auth
+└── Passport Scanner
 
-**Folder Structure:**
+Future:
+├── Barcode Scanner
+├── QR Code Scanner
+├── Passport OCR
+├── Bluetooth Printer
+├── RFID Reader
+├── Face Recognition
+├── Digital ID (eID)
+└── Mobile Printing
 ```
-native/
-├── ios/
-│   ├── camera/
-│   │   ├── CameraModule.swift
-│   │   ├── CameraModule+TurboModule.h
-│   │   └── CameraModule+TurboModule.mm
-│   ├── nfc/
-│   │   ├── NFCModule.swift
-│   │   ├── NFCModule+TurboModule.h
-│   │   └── NFCModule+TurboModule.mm
-│   ├── biometric/
-│   │   ├── BiometricModule.swift
-│   │   └── BiometricModule+TurboModule.mm
-│   └── passport/
-│       ├── PassportScannerModule.swift
-│       └── PassportScannerModule+TurboModule.mm
-├── android/
-│   ├── camera/
-│   │   ├── CameraModule.kt
-│   │   └── CameraPackage.kt
-│   ├── nfc/
-│   │   ├── NFCModule.kt
-│   │   └── NFCPackage.kt
-│   ├── biometric/
-│   │   ├── BiometricModule.kt
-│   │   └── BiometricPackage.kt
-│   └── passport/
-│       ├── PassportScannerModule.kt
-│       └── PassportScannerPackage.kt
-└── bridge/
-    ├── CameraBridge.ts
-    ├── NFCBridge.ts
-    ├── BiometricBridge.ts
-    └── PassportBridge.ts
-```
-
-**Deliverables:**
-- TurboModule implementations for Camera, NFC, Biometric, Passport
-- Bridge interfaces (TypeScript)
-- Swift/Kotlin native modules
-- Error handling and retry logic
 
 ---
 
-## UI FOUNDATION COMPONENTS - Technical Specifications
+## ENTERPRISE ARCHITECTURE LAYERS
 
-### 1. App Bootstrap/Setup (Enhanced with Modules)
+### Layer 1: State Architecture (Redux + TanStack Query)
+**Purpose**: Segregated state management for performance and scalability
 
-**Technical Details:**
-- Entry point: Configure `index.js` with TurboModules, Fabric, and JSI
-- Initialization Flow:
-  - TurboModules registration
-  - Fabric Renderer setup
-  - JSI bridge initialization
-  - Runtime permissions setup
-  - Deep linking configuration
-  - Firebase/Analytics initialization
-  - Feature flags initialization
-  - App update check
-  - Security initialization
-  - Theme/localization initialization
-  - Global error boundary setup
+**Redux (Global State):**
+- Auth, Session, Permissions, UI
 
-**Deliverables:**
-- Configured `App.tsx` with TurboModules, Fabric, JSI initialization
-- Feature flag initialization
-- App update check integration
-- Performance monitoring setup
+**TanStack Query (Server State):**
+- API responses, caching, deduplication, background refetching
+
+**Benefits:**
+- Redux: Minimal, fast, predictable global state
+- TanStack Query: Automatic caching, efficient cache management
+- Better TypeScript inference
+- Reduced Redux boilerplate
 
 ---
 
-### 2-5. Core Components
-
-**Navigation Framework**: React Navigation v6.x with platform-specific patterns (Bottom Tab for iPhone, Split View for iPad)
-
-**State Management**: Redux Toolkit with feature slices and offline persistence
-
-**API Client Abstraction**: Axios with custom interceptors and token refresh
-
-**Authentication/Session Handling**: JWT management with biometric support and session validation
-
----
-
-### 6. Feature Flag Framework
-**Purpose**: Enable/disable features without deployment
-
-**Implementation**: Firebase Remote Config or LaunchDarkly
-- A/B testing support
-- Emergency feature kill switch
-- User cohort management
-
-**Examples:**
-- Enable New Boarding Screen
-- Enable AI Copilot
-- Enable Face Recognition
-
-**Deliverables:**
-- Firebase Remote Config setup
-- Feature flag service
-- A/B testing framework
-- Emergency kill switch implementation
-
----
-
-### 7. App Update Strategy
-**Purpose**: Manage mandatory, optional, and emergency updates
-
-**Update Types:**
-- Mandatory: Force update (blocks app usage)
-- Optional: Show banner (user choice)
-- Emergency: Immediate critical fix
-
-**Flow:**
-```
-App Start → Version API → Force Update? → Update Dialog
-```
-
-**Libraries:**
-- `react-native-version-check`
-
-**Deliverables:**
-- Update version check service
-- Redux update state management
-- In-app update UI components
-- App Store/Play Store integration
-
----
-
-### 8. Offline Framework with Airline Data Domains
-**Purpose**: Support offline operations with domain-specific caching
-
-**Offline Data Domains:**
-```
-Flights: Schedule, Gates, Aircraft Config
-Passengers: Boarding Lists, Details, Requirements
-Boarding Status: Real-time State, Gate Status, Check-in Status
-Gate Information: Queue Status, Capacity, Current Flight
-```
-
-**Flight Manifest Cache:**
-- Example: DXB-LHR with 400+ passengers
-- Boarding continues even if network dies
-- Local snapshot for complete offline functionality
-- 24-hour TTL with manual refresh
-
-**Key Technologies:**
-- Realm for local database
-- Delta sync for efficient updates
-- Cache expiry management
-
-**Deliverables:**
-- Offline data domain schemas
-- Flight manifest caching with expiry
-- Passenger boarding status management
-- Gate information cache
-- Boarding statistics computation
-
----
-
-### 9. Synchronization Conflict Resolution Strategy
-**Purpose**: Handle data conflicts intelligently during sync
-
-**Resolution Strategies:**
-- **Server Wins**: Server value takes precedence
-- **Client Wins**: Client offline changes preserved
-- **Business Rule**: Domain-specific logic
-- **Manual**: User selects resolution
-
-**Airline Example:**
-- Passenger boarded by Gate A at 14:05
-- Passenger boarded by Gate B at 14:06
-- Conflict Resolution: First boarding action wins (business rule)
-
-**Deliverables:**
-- Conflict resolution strategies (4 types)
-- Business rule engine for airline operations
-- Manual resolution UI
-- Conflict logging and analytics
-
----
-
-### 10. Enterprise Observability & Distributed Tracing
-**Purpose**: End-to-end request tracing across mobile, BFF, and microservices
-
-**Trace Headers:**
-```
-x-correlation-id: Unique request ID
-x-trace-id: End-to-end trace ID
-x-session-id: User session ID
-x-user-id: User identifier
-x-parent-span-id: Parent operation ID
-x-span-id: Current operation ID
-x-timestamp: Request timestamp
-```
-
-**Trace Propagation Flow:**
-```
-Mobile App (trace headers)
-    ↓
-BFF Layer (same headers)
-    ↓
-Aggregation Service (same headers)
-    ↓
-Core Microservices (logged)
-```
-
-**Deliverables:**
-- Trace context initialization
-- Correlation ID injection
-- Trace header propagation
-- Distributed trace visualization
-- Centralized logging
-
----
-
-### 11. Analytics Separation: Product, Operational, Technical
-**Purpose**: Distinct analytics streams for different stakeholders
-
-**Analytics Streams:**
-
-**Product Analytics:**
-- Screen views
-- Feature adoption rates
-- User cohorts
-- Conversion funnels
-
-**Operational Analytics:**
-- Boarding time metrics
-- Passenger throughput
-- Failure analysis
-- Process efficiency
-
-**Technical Analytics:**
-- Crash rates
-- API latency
-- Offline usage patterns
-- Performance degradation
-
-**Deliverables:**
-- Separate analytics streams (3 types)
-- Event classification system
-- Dashboard configuration
-- Analytics pipeline setup
-
----
-
-### 12. API SDK Layer
-**Purpose**: Type-safe API communication using OpenAPI-generated SDK
+### Layer 2: Real-Time Communication Architecture (Critical)
+**Purpose**: Enable real-time updates for boarding, gate changes, flight delays
 
 **Architecture:**
 ```
-OpenAPI Spec (from BFF)
-    ↓
-OpenAPI Generator
-    ↓
-Generated SDK (@generated/api)
-    ↓
-React Native App
+React Native ↔ WebSocket Gateway → Event Bus (Kafka) → BFF Services
+```
+
+**Key Events:**
+- gate-changed
+- flight-delayed
+- boarding-started
+- boarding-closed
+- passenger-boarded
+- passenger-missed
+- flight-cancelled
+
+**Implementation:**
+- Socket.io for WebSocket management
+- Automatic reconnection logic
+- Event subscription framework
+- Redux integration for realtime state
+- Offline queue for missed events
+
+---
+
+### Layer 3: Push Notification Strategy
+**Purpose**: Notify users of critical updates
+
+**Architecture:**
+```
+FCM/APNS
+├── Foreground: In-app notification
+├── Background: System notification
+└── Terminated: System notification + deep link
+```
+
+**Notification Types:**
+- Gate changes
+- Flight delays
+- Boarding started/closed
+- Passenger missed
+- Flight cancelled
+- System maintenance
+- Security alerts
+
+---
+
+### Layer 4: Event-Driven Architecture
+**Purpose**: Enable reactive patterns for airline operations
+
+**Event Flow:**
+```
+Passenger Checked In → Event Bus → Subscribers (Boarding, Notifications, Analytics, Audit)
+```
+
+**Deliverables:**
+- Event bus implementation
+- Event type definitions
+- Event persistence layer
+- Event subscriptions
+- Event correlation (tracing)
+
+---
+
+### Layer 5: Enterprise Authentication (SSO + RBAC)
+**Purpose**: Support OAuth2, OIDC, SAML, and enterprise SSO providers
+
+**Supported Providers:**
+- Azure AD (Microsoft Entra ID)
+- Okta
+- Ping Identity
+- Custom SAML
+
+**RBAC/ABAC Framework:**
+- Permission checking utilities
+- Protected route components
+- Role-based UI rendering
+- Attribute-based access control
+
+---
+
+### Layer 6: Performance Monitoring & APM
+**Purpose**: Monitor SLAs and detect performance issues
+
+**APM Integration:**
+- Datadog / Dynatrace / New Relic
+- Metric collection and reporting
+- SLA monitoring dashboard
+- Automatic alerting
+- Performance trends analysis
+- Device-specific tracking
+
+---
+
+### Layer 7: Release Management & Feature Flags
+**Purpose**: Safe, controlled rollouts to production
+
+**Release Pipeline:**
+```
+Dev → SIT → UAT → PreProd → Prod
+(Canary 5% → 25% → 100%)
+```
+
+**Features:**
+- Feature flag management
+- Canary release process
+- Blue-green deployment
+- App Store staged rollout
+- Release notes generation
+- Rollback procedures
+
+---
+
+### Layer 8: Comprehensive Testing Pyramid
+**Purpose**: Ensure quality at all levels
+
+**Testing Levels:**
+- Unit Tests (Jest): 50%
+- Component Tests (React Testing Library): 30%
+- Integration Tests (MSW): 15%
+- E2E Tests (Detox): 5%
+- Device Testing (BrowserStack/AWS Device Farm)
+
+**Target Coverage:** 80%+
+
+---
+
+### Layer 9: AI Governance Layer
+**Purpose**: Secure, audited AI integration with guardrails
+
+**Architecture:**
+```
+UI → AI SDK → AI Gateway → LLM Provider
+(Prompt versioning, guardrails, PII masking, audit logging)
+```
+
+**Key Features:**
+- Prompt versioning system
+- Guardrails framework (safety checks)
+- PII masking utilities
+- Audit logging
+- Model routing logic
+- Rate limiting
+- Cost tracking
+
+**Future Use Cases:**
+- Boarding Copilot
+- Agent Assistant
+- Passenger Query Assistant
+
+---
+
+### Layer 10: Micro-Frontend Strategy
+**Purpose**: Enable independent team development
+
+**Recommended: Nx Monorepo** for React Native/Desktop
+
+**Team Structure:**
+```
+Boarding Team → @airline/boarding library
+Checkin Team → @airline/checkin library
+Flights Team → @airline/flights library
+Customer Team → @airline/customer library
+Baggage Team → @airline/baggage library
+Platform Team → @airline/shared library (UI, auth, realtime, offline)
 ```
 
 **Benefits:**
-- ✅ Type-safe API calls (no manual DTOs)
-- ✅ Auto-sync with BFF contract
-- ✅ Zero contract mismatches
-- ✅ Massive productivity gain
-- ✅ Automatic validation
-
-**Deliverables:**
-- OpenAPI Generator configuration
-- Generated API SDK
-- Custom wrapper layer
-- API service implementations
+- Independent feature development
+- Separate deployment pipelines
+- Type-safe API boundaries
+- Shared component library
+- Unified testing strategy
 
 ---
 
-### 13. Security Hardening
-**Purpose**: Implement enterprise-grade security measures
+### Layer 11: Device Management (MDM)
+**Purpose**: Support corporate-owned devices with management capabilities
 
-**Security Features:**
-- **SSL Pinning**: Certificate-based security
-- **Jailbreak Detection**: iOS jailbreak detection
-- **Root Detection**: Android root detection
-- **Screen Capture Protection**: Disable screenshots for sensitive screens
+**Supported Platforms:**
+- Microsoft Intune
+- VMware Workspace ONE
+- Jamf (Apple)
 
-**Libraries:**
-- `react-native-ssl-pinning`
-- Native modules for jailbreak/root detection
-
-**Deliverables:**
-- SSL Pinning implementation
-- Jailbreak/Root detection
-- Screen capture protection
-- Security module integration
-- Certificate management
+**Capabilities:**
+- Device enrollment flow
+- Policy enforcement (screen lock, disable screenshot)
+- Remote wipe capability
+- Certificate distribution
+- Managed app configuration
 
 ---
 
-### 14. Enhanced Accessibility Standards
-**Purpose**: Comprehensive accessibility support beyond WCAG AA
+### Layer 12: Native SDK Registry
+**Purpose**: Extensible native capability management
 
-**Accessibility Features:**
-- **VoiceOver Support**: iOS screen reader
-- **TalkBack Support**: Android screen reader
-- **Dynamic Font Scaling**: Respects system text size
-- **High Contrast**: WCAG AAA color contrast
-- **Reduced Motion**: Respects system motion preferences
-- **Bold Text**: System text boldness
-- **Touch Target Size**: Min 48x48 points
+**Current Implementations:**
+- Camera Module
+- NFC Reader
+- Biometric Authentication
+- Passport Scanner
 
-**Accessibility Checklist:**
-- ✅ Minimum 44x48 point touch targets
-- ✅ VoiceOver support (iOS)
-- ✅ TalkBack support (Android)
-- ✅ Dynamic Type support
-- ✅ High contrast colors (WCAG AAA)
-- ✅ Reduced motion support
-- ✅ Screen reader labels
-- ✅ Keyboard navigation
-- ✅ Focus indicators
-
-**Deliverables:**
-- Accessibility service
-- Dynamic font scaling
-- High contrast theme
-- VoiceOver/TalkBack support
-- Accessibility testing suite
-
----
-
-### 15. AI Readiness Layer
-**Purpose**: Foundation for future AI/ML integration without UI changes
-
-**AI Architecture:**
-```
-AI/
-├── PromptManager (Handle different AI prompts)
-├── ContextManager (Manage conversation context)
-├── AIClient (Client for AI service)
-├── ToolRegistry (Register tools/functions AI can call)
-└── ResponseHandler (Parse and display AI responses)
-```
-
-**Future Use Cases:**
-- **Boarding Copilot**: Assist passengers with boarding procedures
-- **Agent Assistant**: Help gate agents with real-time decisions
-- **Passenger Query Assistant**: Answer common questions
-
-**AI Capabilities:**
-- Context-aware conversations
-- Tool integration for actions (search passenger, update status)
-- Multi-turn conversations with session persistence
-- Streaming response support
-
-**Deliverables:**
-- AI SDK layer foundation
-- Prompt management system
-- Context management
-- Tool registry
-- Response handling framework
-
----
-
-### 16. iPad-Specific Strategy (Critical)
-**Purpose**: Comprehensive iPad support with adaptive layouts and multi-window support
-
-**iPad-Specific Features:**
-- **Split View**: Master-Detail navigation pattern
-- **Multi-Window**: Support multiple app instances
-- **Landscape-First**: Optimized for landscape orientation
-- **External Keyboard**: Full keyboard navigation support
-- **Adaptive Layouts**: Different layouts for compact/regular width
-
-**Adaptive Layout Framework:**
-```
-Compact Width (< 600pts):
-├── Portrait: Single column
-└── Landscape: Two-column with narrow secondary
-
-Regular Width (600-1000pts):
-├── Portrait: Two-column with narrow secondary
-└── Landscape: Two-column balanced
-
-Extra Large (> 1000pts):
-├── Split View: Three-pane (sidebar + master + detail)
-└── Multi-window support
-```
-
-**iPad Navigation Patterns:**
-- **Phone**: Bottom Tab Navigation
-- **iPad Portrait**: Side Navigation + Detail Pane
-- **iPad Landscape**: Split View with keyboard support
-
-**External Keyboard Support:**
-- Command+B: Board passenger
-- Command+S: Search passenger
-- Command+N: New booking
-- Arrow keys for navigation
-- Tab for focus management
-
-**Deliverables:**
-- Adaptive navigation structure
-- iPad-specific Split View implementation
-- Landscape orientation support
-- External keyboard shortcuts
-- Size class based layouts
+**Future Capabilities:**
+- Barcode Scanner
+- QR Code Scanner
+- Passport OCR
+- Bluetooth Printer
+- RFID Reader
+- Face Recognition
+- Digital ID (eID)
+- Mobile Printing
 
 ---
 
@@ -496,6 +357,8 @@ Extra Large (> 1000pts):
 | Crash Free Sessions | > 99.8% | > 99.5% |
 | Offline Sync Duration | < 10 sec | < 20 sec |
 | Battery Impact | < 5% / hour | < 8% / hour |
+| Realtime Latency | < 500 ms | < 1 sec |
+| Push Notification Delivery | < 3 sec | < 5 sec |
 
 ---
 
@@ -503,89 +366,60 @@ Extra Large (> 1000pts):
 
 | Component | Technology | Version |
 |-----------|-----------|---------|
+| Monorepo | Nx | 18.x |
 | Framework | React Native | >= 0.80 |
 | Language | TypeScript | 5.x |
-| Rendering | Fabric + TurboModules | Latest |
-| Navigation | React Navigation | 6.x |
-| State Management | Redux Toolkit | 1.9.x |
+| Global State | Redux Toolkit | 1.9.x |
+| Server State | TanStack Query | 5.x |
+| Real-time | Socket.io | 4.x |
 | HTTP Client | Axios + OpenAPI SDK | 1.x |
 | Local Database | Realm | 12.x |
-| Secure Storage | react-native-keychain | 8.x |
 | Feature Flags | Firebase Remote Config | Latest |
-| Error Tracking | Sentry | 5.x |
-| Analytics | Firebase Analytics (separated) | Latest |
-| Testing | Jest + Detox | Latest |
-
----
-
-## Implementation Priority & Timeline
-
-### Phase 1 (Week 1-2): Foundation & Modules
-- [ ] React Native 0.80+ with TurboModules/Fabric
-- [ ] Native Bridge setup (Camera, NFC, Passport)
-- [ ] App Bootstrap
-- [ ] Navigation Framework
-
-### Phase 2 (Week 3-4): Enterprise Features
-- [ ] Feature Flags
-- [ ] App Update Strategy
-- [ ] Security Hardening
-- [ ] Observability Setup
-
-### Phase 3 (Week 5-6): Core Services
-- [ ] State Management
-- [ ] API Client (OpenAPI SDK)
-- [ ] Offline Framework (with airline data)
-- [ ] Sync Conflict Resolution
-
-### Phase 4 (Week 7-8): Resilience & AI
-- [ ] Error Handling/Retry
-- [ ] Logging/Analytics (separated)
-- [ ] Accessibility
-- [ ] AI Readiness Layer
-
-### Phase 5 (Week 9-10): iPad & Polish
-- [ ] iPad-Specific Navigation
-- [ ] Adaptive Layouts
-- [ ] Multi-Window Support
-- [ ] Performance Optimization
+| Push Notifications | FCM/APNS | Latest |
+| Design System | Figma Tokens + Storybook | Latest |
+| APM | Datadog/Dynatrace | Latest |
+| Testing | Jest + Detox + MSW | Latest |
+| AI | OpenAI/Claude + Gateway | Latest |
 
 ---
 
 ## Enterprise Readiness Checklist
 
-- ✅ TurboModules enabled for native performance
-- ✅ Native bridge for Swift-specific features
-- ✅ Feature flags for risk-free deployments
-- ✅ App update strategy for patch management
-- ✅ Offline-first architecture with airline data
-- ✅ Conflict resolution for distributed operations
-- ✅ Distributed tracing for debugging
-- ✅ Separated analytics for stakeholders
-- ✅ SSL Pinning for security
-- ✅ Jailbreak/Root detection
-- ✅ Accessibility WCAG AAA compliance
-- ✅ iPad-optimized for all operations
-- ✅ AI framework ready (boarding copilot use case)
+- ✅ Monorepo (Nx) for code sharing and multi-team development
+- ✅ Design System Governance (Figma Tokens → Storybook)
+- ✅ State Architecture (Redux + TanStack Query)
+- ✅ Real-time Communication (WebSocket)
+- ✅ Event-driven Architecture with audit trail
+- ✅ Push Notifications (FCM/APNS)
+- ✅ Enterprise SSO (OAuth2/OIDC/SAML)
+- ✅ RBAC/ABAC Framework
+- ✅ APM with SLA monitoring
+- ✅ Canary/Blue-Green Deployments
+- ✅ Testing Pyramid (Unit/Component/Integration/E2E)
+- ✅ AI Governance with guardrails
+- ✅ Micro-frontend Strategy
+- ✅ MDM Support (Intune/VMware/Jamf)
+- ✅ Native SDK Registry (extensible)
 - ✅ Performance SLAs defined and monitored
-- ✅ OpenAPI SDK for contract-first API integration
 
 ---
 
 ## Success Criteria
 
-- ✅ Type-safe codebase (TypeScript strict mode)
-- ✅ 90%+ code coverage for core utilities
-- ✅ All performance SLAs met
-- ✅ Network requests with automatic retry and offline support
-- ✅ Accessible components (WCAG 2.1 Level AAA)
-- ✅ Smooth animations with 60 FPS (iPad included)
-- ✅ Comprehensive error tracking and distributed tracing
-- ✅ Theme switching without app restart
-- ✅ Feature flags functional and tested
-- ✅ App updates flow working (all 3 types)
-- ✅ Offline boarding workflow fully operational
-- ✅ iPad full feature parity with enhanced layouts
-- ✅ AI framework ready for future integration
+- ✅ Single source of truth for design (Figma Tokens)
+- ✅ Shared component library (React Native + Desktop)
+- ✅ Real-time communication working (< 500ms latency)
+- ✅ All SLAs being met and monitored
+- ✅ Type-safe API integration (OpenAPI SDK)
+- ✅ Enterprise authentication (SSO + RBAC)
+- ✅ APM dashboard live with alerts
+- ✅ Feature flags enabling safe deployments
+- ✅ AI Gateway with governance and audit trail
+- ✅ Multiple independent teams delivering features
+- ✅ Push notifications delivering reliably
+- ✅ Offline-first boarding workflows
+- ✅ iPad full feature parity
 - ✅ Security hardening verified
-- ✅ Accessibility compliance verified
+- ✅ Accessibility WCAG AAA compliance
+- ✅ Ready for agentic AI integration
+- ✅ Airport operational workflows supported
