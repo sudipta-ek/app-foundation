@@ -12,16 +12,24 @@
 ### Monorepo Strategy (Nx)
 **Purpose**: Single source of truth for React Native, React Desktop, and shared libraries
 
-**Recommended Structure:**
+**Recommended Structure (Responsive-First + Separate Shells):**
 ```
 airline-platform/
 ├── apps/
-│   ├── mobile/               # React Native iOS/Android
-│   ├── desktop/              # React Desktop
+│   ├── mobile-shell/         # Native shell: navigation container, app bootstrap, native permissions
+│   ├── desktop-shell/        # Desktop shell: web/desktop routing, window/layout chrome
 │   └── api-gateway/          # Optional: Node.js gateway
 ├── libs/
+│   ├── features/
+│   │   ├── boarding/         # Shared feature modules (responsive screens, hooks, state)
+│   │   ├── checkin/
+│   │   └── flights/
+│   ├── ui-responsive/        # Cross-platform responsive components (RN primitives)
+│   ├── ui-native/            # Native-only components (camera overlays, biometric prompts)
+│   ├── ui-desktop/           # Desktop-only components (dense tables, keyboard-heavy flows)
+│   ├── native-capabilities/  # TurboModules, capability contracts, adapters, registry
+│   ├── navigation-contracts/ # Typed route contracts used by both shells
 │   ├── sdk/                  # Generated OpenAPI SDK
-│   ├── ui/                   # Shared design system
 │   ├── auth/                 # Authentication logic
 │   ├── realtime/             # WebSocket + Event handling
 │   ├── analytics/            # Analytics SDK
@@ -35,12 +43,179 @@ airline-platform/
 └── docs/
 ```
 
+**How to achieve this:**
+- Build features once in `libs/features/*` with responsive layouts and platform-safe primitives
+- Keep only shell concerns in `apps/mobile-shell` and `apps/desktop-shell` (bootstrap, root navigation, platform policies)
+- Use `ui-responsive` as default; use `ui-native` or `ui-desktop` only when responsive implementation cannot satisfy UX or hardware constraints
+- Enforce Nx boundaries so feature libs cannot import shell apps directly
+- Define typed navigation contracts in `navigation-contracts`; each shell maps contracts to its own navigator/router
+- Route all native hardware capabilities through `native-capabilities` + `ui-native` to avoid leaking native dependencies into shared features
+
+**Decision Rule (default-first):**
+- Default: implement in responsive shared library
+- Exception: move to native/desktop-specific library only when required by hardware API, OS behavior, or unacceptable UX/performance
+
 **Benefits:**
 - ✅ Single dependency management
-- ✅ Shared component library
-- ✅ Code reuse between mobile & desktop
+- ✅ Maximum code reuse across mobile and desktop
+- ✅ Separate shells for platform-specific app chrome and lifecycle
+- ✅ Clear isolation of native-only and desktop-only UX
 - ✅ Unified testing strategy
 - ✅ Consistent design system
+
+---
+
+### TypeScript Structure Governance (`libs/features`, `libs/ui-responsive`, `libs/ui-native`)
+**Purpose**: Define exact TypeScript-level separation for screens, components, hooks, and state to keep modules scalable, testable, and platform-safe.
+
+**Separation Rule (mandatory):**
+- `libs/features/*` = business workflows and orchestration (screens, feature hooks, feature state)
+- `libs/ui-responsive` = reusable responsive UI primitives and layout components
+- `libs/ui-native` = native-only UI wrappers and presenters that depend on native capability APIs
+
+**Dependency Direction:**
+```
+features  →  ui-responsive
+features  →  ui-native (exception-only)
+ui-native →  native-capabilities/public-api
+ui-responsive → shared/theme/tokens only
+
+Forbidden:
+ui-responsive → ui-native
+ui-responsive → native-capabilities
+features → apps/mobile-shell or apps/desktop-shell
+```
+
+**Folder Structure (Recommended):**
+```
+airline-platform/
+├── libs/
+│   ├── features/
+│   │   └── boarding/
+│   │       └── src/
+│   │           ├── screens/
+│   │           │   ├── boarding-list.screen.tsx
+│   │           │   └── passenger-scan.screen.tsx
+│   │           ├── components/
+│   │           │   ├── boarding-card.component.tsx
+│   │           │   ├── boarding-status-badge.component.tsx
+│   │           │   └── scan-result-banner.component.tsx
+│   │           ├── hooks/
+│   │           │   ├── use-boarding-list.hook.ts
+│   │           │   ├── use-passenger-scan.hook.ts
+│   │           │   └── use-boarding-permissions.hook.ts
+│   │           ├── state/
+│   │           │   ├── boarding.slice.ts
+│   │           │   ├── boarding.selectors.ts
+│   │           │   ├── boarding.actions.ts
+│   │           │   └── boarding.types.ts
+│   │           ├── services/
+│   │           │   ├── boarding-api.service.ts
+│   │           │   └── boarding-sync.service.ts
+│   │           ├── mappers/
+│   │           │   └── boarding.mapper.ts
+│   │           ├── validation/
+│   │           │   └── boarding.validation.ts
+│   │           ├── routes/
+│   │           │   └── boarding.routes.ts
+│   │           ├── __tests__/
+│   │           │   ├── passenger-scan.screen.spec.tsx
+│   │           │   ├── use-passenger-scan.hook.spec.ts
+│   │           │   └── boarding.slice.spec.ts
+│   │           └── index.ts
+│   ├── ui-responsive/
+│   │   └── src/
+│   │       ├── components/
+│   │       │   ├── app-header.component.tsx
+│   │       │   ├── responsive-grid.component.tsx
+│   │       │   ├── responsive-table-card.component.tsx
+│   │       │   └── status-chip.component.tsx
+│   │       ├── layout/
+│   │       │   ├── page-shell.layout.tsx
+│   │       │   ├── split-pane.layout.tsx
+│   │       │   └── use-breakpoint.hook.ts
+│   │       ├── forms/
+│   │       │   ├── text-field.component.tsx
+│   │       │   └── select-field.component.tsx
+│   │       ├── feedback/
+│   │       │   ├── inline-error.component.tsx
+│   │       │   └── loading-skeleton.component.tsx
+│   │       ├── theme/
+│   │       │   ├── spacing.tokens.ts
+│   │       │   └── typography.tokens.ts
+│   │       ├── __tests__/
+│   │       │   └── responsive-grid.component.spec.tsx
+│   │       └── index.ts
+│   ├── ui-native/
+│   │   └── src/
+│   │       ├── camera/
+│   │       │   ├── camera-preview-native.component.tsx
+│   │       │   ├── scan-frame-overlay-native.component.tsx
+│   │       │   └── use-camera-permission-native.hook.ts
+│   │       ├── biometric/
+│   │       │   ├── biometric-prompt-native.component.tsx
+│   │       │   └── use-biometric-prompt-native.hook.ts
+│   │       ├── nfc/
+│   │       │   ├── nfc-scan-sheet-native.component.tsx
+│   │       │   └── use-nfc-session-native.hook.ts
+│   │       ├── passport/
+│   │       │   └── mrz-capture-native.component.tsx
+│   │       ├── guards/
+│   │       │   └── capability-guard-native.component.tsx
+│   │       ├── __tests__/
+│   │       │   └── capability-guard-native.component.spec.tsx
+│   │       └── index.ts
+```
+
+**Naming Convention (TypeScript):**
+
+| Artifact | Suffix | Example |
+|----------|--------|---------|
+| Screen | `.screen.tsx` | `passenger-scan.screen.tsx` |
+| Reusable component | `.component.tsx` | `boarding-card.component.tsx` |
+| Layout component | `.layout.tsx` | `page-shell.layout.tsx` |
+| Hook | `.hook.ts` | `use-passenger-scan.hook.ts` |
+| Redux slice | `.slice.ts` | `boarding.slice.ts` |
+| Selectors | `.selectors.ts` | `boarding.selectors.ts` |
+| Actions/commands | `.actions.ts` | `boarding.actions.ts` |
+| Type definitions | `.types.ts` | `boarding.types.ts` |
+| API/service adapter | `.service.ts` | `boarding-api.service.ts` |
+| Mapper/transformer | `.mapper.ts` | `boarding.mapper.ts` |
+| Validation rules | `.validation.ts` | `boarding.validation.ts` |
+| Test spec | `.spec.ts` / `.spec.tsx` | `use-passenger-scan.hook.spec.ts` |
+
+**What goes where (component/screen/hooks/state):**
+
+| Concern                        | `libs/features/*` | `libs/ui-responsive` | `libs/ui-native` |
+|--------------------------------|-------------------|----------------------|------------------|
+| Screens                        | ✅ Owns all feature screens | ❌ | ❌ |
+| Feature-specific components    | ✅ | ❌ | ❌ |
+| Generic responsive components  | ⚠️ consume only | ✅ owns | ❌ |
+| Native capability wrappers     | ❌ | ❌ | ✅ owns |
+| Feature hooks (workflow/business) | ✅ owns | ❌ | ❌ |
+| UI utility hooks (breakpoints/layout) | ❌ consume | ✅ owns | ❌ |
+| Native hooks (permission/session) | ❌ | ❌ | ✅ owns |
+| Redux feature slice/selectors/actions | ✅ owns | ❌ | ❌ |
+| API orchestration/service calls | ✅ owns | ❌ | ❌ |
+
+**Implementation Rules:**
+- Screen files in `features` can compose from both `ui-responsive` and `ui-native`, but native imports must be behind capability guards
+- `ui-responsive` must not import capability or OS-specific modules
+- `ui-native` must not include domain business rules (only presentation + capability interaction)
+- Business state (`slice`, `selectors`, `actions`) remains in `features`, never in UI libraries
+- Shared UI libraries expose stable barrels via `index.ts`; feature libraries consume only exported public surface
+
+**Example Composition Pattern (Boarding Scan Screen):**
+- `libs/features/boarding/src/screens/passenger-scan.screen.tsx` orchestrates the flow
+- Uses `responsive-grid.component.tsx` from `ui-responsive` for layout
+- Uses `camera-preview-native.component.tsx` from `ui-native` when camera capability is enabled
+- Uses `use-passenger-scan.hook.ts` (feature hook) for business logic + state updates
+- Uses `boarding.slice.ts` for persisted workflow state and selectors for rendering
+
+**Nx Boundary Tags (recommended):**
+- `scope:features`, `scope:ui-responsive`, `scope:ui-native`, `scope:native-capabilities`
+- `type:screen`, `type:component`, `type:hook`, `type:state`
+- Enforce constraints so only approved dependency directions are allowed
 
 ---
 
@@ -100,10 +275,114 @@ CapabilityPlatform
 ```
 
 **Native Bridge Framework:**
-- TurboModule implementation for all native capabilities (< 1ms JSI latency)
-- Swift (iOS) and Kotlin (Android) native modules
-- Capability versioning — native module version tracked alongside app version
-- Capability contract defined in TypeScript interface before native implementation
+
+**Bridge Architecture Flow:**
+```
+Separation: contracts → adapters → native-specs → platform impl.
+
+Feature Screen (libs/features/*)
+  ↓ calls typed hook
+Capability Public API (libs/native-capabilities/src/public-api)
+  ↓ resolves policy + availability
+Adapter (libs/native-capabilities/src/adapters/{ios,android,mock})
+  ↓ invokes TurboModule spec
+Native Bridge (apps/mobile-shell/ios|android)
+  ↓ OS frameworks (Camera, NFC, LocalAuthentication)
+Result + telemetry + audit-safe errors → Feature UI
+```
+
+**TypeScript-First Contract (required before native code):**
+```ts
+// libs/native-capabilities/src/contracts/camera.contract.ts
+export type CameraScanResult = {
+  rawValue: string;
+  format: 'qr' | 'barcode' | 'mrz';
+  capturedAtUtc: string;
+};
+
+export interface CameraCapability {
+  isAvailable(): Promise<boolean>;
+  requestPermission(): Promise<'granted' | 'denied' | 'blocked'>;
+  scanOnce(): Promise<CameraScanResult>;
+}
+```
+
+**TurboModule Spec Sample (JS side):**
+```ts
+// apps/mobile-shell/src/native-specs/NativeCameraModule.ts
+import type { TurboModule } from 'react-native';
+import { TurboModuleRegistry } from 'react-native';
+
+export interface Spec extends TurboModule {
+  isAvailable(): Promise<boolean>;
+  requestPermission(): Promise<'granted' | 'denied' | 'blocked'>;
+  scanOnce(): Promise<{ rawValue: string; format: string; capturedAtUtc: string }>;
+}
+
+export default TurboModuleRegistry.getEnforcing<Spec>('NativeCameraModule');
+```
+
+**Native Implementation Sample (iOS Swift):**
+```swift
+@objc(NativeCameraModule)
+class NativeCameraModule: NSObject {
+  @objc func isAvailable(_ resolve: RCTPromiseResolveBlock, reject: RCTPromiseRejectBlock) {
+    resolve(true)
+  }
+
+  @objc func requestPermission(_ resolve: RCTPromiseResolveBlock, reject: RCTPromiseRejectBlock) {
+    resolve("granted")
+  }
+}
+```
+
+**Native Implementation Sample (Android Kotlin):**
+```kotlin
+class NativeCameraModule(reactContext: ReactApplicationContext) :
+  NativeCameraModuleSpec(reactContext) {
+
+  override fun isAvailable(promise: Promise) {
+    promise.resolve(true)
+  }
+
+  override fun requestPermission(promise: Promise) {
+    promise.resolve("granted")
+  }
+}
+```
+
+**Adapter Wrapper Sample (platform isolation):**
+```ts
+// libs/native-capabilities/src/adapters/ios/camera.adapter.ts
+import NativeCameraModule from '@airline/mobile-shell-native-specs/NativeCameraModule';
+import type { CameraCapability } from '../../contracts/camera.contract';
+
+export const iosCameraAdapter: CameraCapability = {
+  isAvailable: () => NativeCameraModule.isAvailable(),
+  requestPermission: () => NativeCameraModule.requestPermission(),
+  scanOnce: () => NativeCameraModule.scanOnce(),
+};
+```
+
+**Bridge Governance Model:**
+
+| Governance Area | Rule | Owner | Evidence Required |
+|-----------------|------|-------|-------------------|
+| Contract-First  | No native implementation without approved TS contract | Platform Team | PR with `contracts/*.contract.ts` + ADR link |
+| API Stability   | Breaking bridge signature requires new major capability version | Platform Team | Compatibility Matrix update + migration notes |
+| Platform Parity | iOS and Android must implement same contract or document exception | Platform Team | Parity checklist in PR |
+| Error Model     | Native errors mapped to typed domain-safe errors (no raw OS error surfaced) | Platform Team | `errors/capability-errors.ts` test coverage |
+| Security & Privacy | Permission rationale, PII-safe payloads, no sensitive logging | Security + Platform | Threat review + log review checklist |
+| Performance     | P95 bridge call latency target defined per capability | Platform Team | Telemetry dashboard (`capability_latency_ms`) |
+| Testability     | Mock adapter required for CI and simulator | Platform Team | `adapters/mock/*` + contract tests |
+| Release Control | Bridge changes gated behind feature flags during rollout | Platform Team + Domain Team | Flag config + rollout plan |
+
+**Bridge Quality Gates (mandatory before merge):**
+- Contract tests pass for `ios`, `android`, and `mock` adapters
+- Type compatibility check passes between TurboModule spec and TS contract
+- Permission-denied and capability-unavailable paths are covered in tests
+- Telemetry events emitted: `capability_start`, `capability_success`, `capability_failure`, `capability_latency_ms`
+- Rollback path defined (feature flag off + adapter fallback)
 
 **Capability Roadmap:**
 ```
@@ -117,6 +396,114 @@ Future:
 ├── Digital ID (eID)
 └── Mobile Printing
 ```
+
+**Governance Model (Component-Level):**
+
+| Layer      | Responsibility | Allowed Dependencies | Folder |
+|------------|----------------|----------------------|--------|
+| Feature UI | Uses capability through typed hooks only (`useCameraCapture`, `useNfcRead`) | `ui-responsive`, `ui-native`, `native-capabilities/public-api` | `libs/features/*` |
+| Native UI Components | Platform-specific rendering and UX wrappers (camera preview overlay, biometric modal) | `native-capabilities/public-api` | `libs/ui-native/*` |
+| Capability Facade | Stable TypeScript contracts, feature flags, runtime guards, fallback strategy | `native-capabilities/contracts`, `native-capabilities/registry` | `libs/native-capabilities/src/public-api` |
+| Registry & Orchestration | Capability discovery, enable/disable policy, MDM overrides, version checks | `native-capabilities/adapters/*` | `libs/native-capabilities/src/registry` |
+| Platform Adapters | iOS/Android specific adapter logic implementing shared contracts | TurboModule bindings only | `libs/native-capabilities/src/adapters/{ios,android}` |
+| Native Bridge | TurboModule/JSI implementation in Swift/Kotlin | OS SDKs and device frameworks | `apps/mobile-shell/ios` and `apps/mobile-shell/android` |
+
+**Folder Structure (Native Bridge - High Level):**
+```
+libs/                                        # Shared libraries in monorepo
+├── native-capabilities/                     # Capability contracts, adapters, policies, telemetry
+│   └── src/                                 # TypeScript source for capability platform
+│       ├── contracts/                       # Contract-first capability interfaces and DTOs
+│       │   ├── camera.contract.ts
+│       │   ├── nfc.contract.ts
+│       │   └── biometric.contract.ts
+│       ├── public-api/                      # Stable API consumed by features and ui-native
+│       │   ├── hooks/                       # Capability hooks exposed to application code
+│       │   │   ├── use-camera.ts
+│       │   │   ├── use-nfc.ts
+│       │   │   └── use-biometric.ts
+│       │   ├── services/                    # Facade services for orchestration and fallback
+│       │   │   └── capability-service.ts
+│       │   └── index.ts                     # Barrel exports for controlled consumption
+│       ├── registry/                        # Discovery, policy resolution, version compatibility
+│       │   ├── capability-registry.ts
+│       │   ├── capability-policy.ts
+│       │   └── capability-version.ts
+│       ├── adapters/                        # Platform adapters implementing contracts
+│       │   ├── ios/                         # iOS adapter implementations
+│       │   │   ├── camera.adapter.ts
+│       │   │   ├── nfc.adapter.ts
+│       │   │   └── biometric.adapter.ts
+│       │   ├── android/                     # Android adapter implementations
+│       │   │   ├── camera.adapter.ts
+│       │   │   ├── nfc.adapter.ts
+│       │   │   └── biometric.adapter.ts
+│       │   └── mock/                        # Test/simulator adapters for CI and local runs
+│       │       ├── camera.adapter.ts
+│       │       ├── nfc.adapter.ts
+│       │       └── biometric.adapter.ts
+│       ├── telemetry/                       # Capability metrics/events emission definitions
+│       │   └── capability-events.ts
+│       └── errors/                          # Typed, safe capability error taxonomy and mapping
+│           └── capability-errors.ts
+└── ui-native/                               # Native-only UI components/wrappers
+    └── src/                                 # React Native UI source for native experiences
+        ├── camera/                          # Camera-specific native presentation components
+        │   ├── camera-preview-native.component.tsx
+        │   └── scan-frame-overlay-native.component.tsx
+        ├── nfc/                             # NFC-specific native presentation components
+        │   └── nfc-scan-sheet-native.component.tsx
+        ├── biometric/                       # Biometric-specific native presentation components
+        │   └── biometric-prompt-native.component.tsx
+        └── passport/                        # Passport/MRZ native presentation components
+            └── mrz-capture-native.component.tsx
+
+apps/                                        # Deployable application shells
+└── mobile-shell/                            # Mobile app shell hosting native bridge/runtime
+    ├── src/                                 # App shell TypeScript source
+    │   └── native-specs/                    # TurboModule JS/TS specs (bridge contracts)
+    │       ├── NativeCameraModule.ts
+    │       ├── NativeNfcModule.ts
+    │       └── NativeBiometricModule.ts
+    ├── ios/                                 # iOS native bridge implementations (Swift/ObjC)
+    │   ├── NativeCameraModuleImpl.ts
+    │   ├── NativeNfcModuleImpl.ts
+    │   └── NativeBiometricModuleImpl.ts
+    └── android/                             # Android native bridge implementations (Kotlin/Java)
+        ├── NativeCameraModuleImpl.ts
+        ├── NativeNfcModuleImpl.ts
+        └── NativeBiometricModuleImpl.ts
+```
+
+**Component Rules (What to build where):**
+- Put **business workflow UI** in `libs/features/*` (scan flow, validation steps, error state orchestration)
+- Put **native-only UI wrappers** in `libs/ui-native/*` (camera overlay, biometric prompt presenter)
+- Put **capability contracts and hooks** in `libs/native-capabilities/src/public-api`
+- Put **device detection, fallback, policy checks** in `libs/native-capabilities/src/registry`
+- Put **OS-specific bridge logic** only in `apps/mobile-shell/ios` and `apps/mobile-shell/android`
+- Never import iOS/Android-specific packages directly in `libs/features/*`
+
+**Lifecycle Workflow (Mandatory):**
+1. Define TypeScript contract in `contracts/` and add ADR entry (`docs/adr/`)
+2. Implement mock adapter for simulator/test usage
+3. Implement iOS/Android adapters behind same contract
+4. Add capability policy entry (feature flag + airport/MDM constraints)
+5. Add telemetry (`capability_start`, `capability_success`, `capability_failure`, `capability_latency_ms`)
+6. Add test coverage: contract tests, adapter tests, feature integration tests
+7. Publish version update in Compatibility Matrix and release notes
+
+**Governance Gates (DoD for every new capability):**
+- Security review complete (permissions, storage, PII handling)
+- Accessibility review complete for native UI wrapper
+- Offline behavior defined (queue, retry, or explicit non-support)
+- Error taxonomy mapped to user-safe messages and audit events
+- iOS + Android parity documented (or approved exception)
+- MDM policy compatibility verified
+- Observability and audit events emitting correctly
+
+**Ownership:**
+- Platform Team: contracts, registry, adapters, TurboModules, telemetry, governance gates
+- Domain Teams: feature workflows and UI composition using approved capability APIs
 
 ---
 
@@ -1325,6 +1712,31 @@ CapabilityService.detect()
 | Event Schema | AsyncAPI + Solace Schema Registry | Latest |
 | Observability | OpenTelemetry | Latest |
 | Log Aggregation | Azure Monitor / Datadog Logs | Latest |
+
+---
+
+## Compatibility Matrix
+
+**Purpose**: Define cross-layer version interoperability for each release so teams can safely coordinate mobile app, BFF APIs, event contracts, and airport configuration changes.
+
+**Versioning Rules:**
+- App releases use calendar versioning (`YYYY.MM.PATCH`)
+- API and event contracts use semantic versioning (`MAJOR.MINOR.PATCH`)
+- Airport configuration schema uses semantic versioning (`MAJOR.MINOR`)
+- Breaking changes require new major version + migration window
+
+| App Release | RN Baseline | Mobile SDK Contract | Supported BFF API | Supported Event Contracts | Airport Config Schema | Notes |
+|-------------|-------------|---------------------|-------------------|---------------------------|-----------------------|-------|
+| 2026.06.0 | 0.80.x | sdk `v1.8.x` | `v1` | `v1` | `1.4.x` | Current production baseline |
+| 2026.08.0 | 0.81.x | sdk `v1.9.x` | `v1`, `v2` | `v1`, `v2` | `1.5.x` | Dual-stack transition release |
+| 2026.10.0 | 0.81.x | sdk `v2.0.x` | `v2` | `v2` | `2.0.x` | `v1` contracts sunset complete |
+
+**Compatibility Policy:**
+- Mobile app must support at least `current` and `previous` API major version during migrations
+- Event consumers must accept `current` and `previous` event major version during migration window
+- Airport config changes must be backward-compatible within the same major schema version
+- CI release gate fails if matrix entry is missing for the target release
+- Matrix is updated by Platform Team for every release train and reviewed at ARB checkpoints
 
 ---
 
