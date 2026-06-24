@@ -592,13 +592,13 @@ Passenger Checked In → Event Bus (Solace) → Subscribers (Boarding, Notificat
 ---
 
 ### Layer 5: Enterprise Authentication (SSO + RBAC)
-**Purpose**: Support OAuth2, OIDC, SAML, and enterprise SSO providers
+**Purpose**: Support OAuth2, and enterprise SSO providers
 
 **Supported Providers:**
 - Azure AD (Microsoft Entra ID)
 - Okta
 - Ping Identity
-- Custom SAML
+
 
 **RBAC/ABAC Framework:**
 - Permission checking utilities
