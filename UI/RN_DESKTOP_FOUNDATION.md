@@ -99,6 +99,36 @@ Rules:
 5. Mount router/layout shell
 6. Register keyboard workflows and command map
 
+## 5.3 Implementation Guidelines
+- Keep shell logic in `apps/desktop-shell` only; never move domain business logic into shell.
+- Register providers in strict order: config → auth/session → state/query → routing → telemetry.
+- Use a single startup orchestrator with explicit phases and fail-fast logging.
+- Keep global error boundary and global toast/notification host at shell root.
+- Expose a shell contract (`bootstrapContext`) for feature libraries (read-only).
+
+## 5.4 Folder Structure
+
+```text
+apps/
+  desktop-shell/
+    src/
+      bootstrap/
+        bootstrap-app.ts                 # startup orchestrator
+        bootstrap-config.ts              # runtime/env + remote config
+        bootstrap-session.ts             # restore/login/session validation
+        bootstrap-telemetry.ts           # tracing + analytics init
+      providers/
+        app-providers.tsx                # redux/query/theme/i18n composition
+      shell/
+        app-shell.tsx                    # root shell layout frame
+        app-error-boundary.tsx           # global error boundary
+        app-notification-host.tsx        # global notification host
+      startup/
+        startup-state.slice.ts           # startup phase state
+        startup.selectors.ts
+      index.tsx
+```
+
 ---
 
 ## 6. Routing and Layout Framework
@@ -113,6 +143,40 @@ Rules:
 - Shell layout: top app bar + side navigation + content region
 - Desktop workspace layouts: split pane, inspector pane, tabbed work area
 - Consistent breadcrumbs and command bar patterns
+
+## 6.3 Implementation Guidelines
+- Central route registry is the only cross-domain navigation entry.
+- Enforce typed route contracts (`params`, `required permissions`, `feature flags`).
+- Use route-level lazy loading for domain modules.
+- Keep layout primitives in `ui-desktop/layout`; keep route declarations in feature libraries.
+- Require audit-safe telemetry on route entry/denial.
+
+## 6.4 Folder Structure
+
+```text
+apps/
+  desktop-shell/
+    src/
+      routing/
+        route-registry.ts                # central route map
+        route-loader.ts                  # lazy loading + guards
+        route-types.ts                   # typed route contracts
+        navigation.service.ts            # shell-level navigation service
+      layout/
+        shell-layout.tsx                 # app bar + side nav + content
+        workspace-layout.tsx             # split/tab/inspector layout
+        breadcrumbs.tsx
+      guards/
+        route-permission.guard.tsx
+        route-flag.guard.tsx
+
+libs/
+  features/
+    boarding/
+      src/
+        routes/
+          boarding.routes.ts             # domain route declarations
+```
 
 ---
 
@@ -129,6 +193,37 @@ Rules:
 - Data access via query hooks only
 - No direct API calls from cell renderer components
 
+## 7.3 Implementation Guidelines
+- Wrap selected grid engine behind one `enterprise-grid` adapter component.
+- Standardize server-side query contract (`page`, `size`, `sort`, `filters`).
+- Keep column definitions versioned and persist user preferences by role/user.
+- Move all row actions through typed action callbacks with permission checks.
+- Grid components are presentation-only; data retrieval lives in feature query hooks.
+
+## 7.4 Folder Structure
+
+```text
+libs/
+  ui-desktop/
+    src/
+      grid/
+        enterprise-grid.component.tsx    # wrapper over selected grid engine
+        grid-column.types.ts
+        grid-toolbar.component.tsx
+        grid-preferences.service.ts       # column visibility/order persistence
+        grid-shortcuts.ts                 # keyboard navigation config
+
+  features/
+    flights/
+      src/
+        queries/
+          use-flight-grid.query.ts
+        mappers/
+          flight-grid.mapper.ts
+        components/
+          flight-grid.container.tsx       # binds query data to enterprise-grid
+```
+
 ---
 
 ## 8. Form Engine
@@ -142,6 +237,44 @@ Requirements:
 Implementation guidance:
 - Shared form primitives across mobile/desktop where possible
 - Desktop-specific field UX in `ui-desktop/forms`
+
+## 8.1 Implementation Guidelines
+- Use a single form abstraction (`useEnterpriseForm`) over React Hook Form.
+- Validation schemas must be colocated with form domain model and versioned.
+- Support async validations with debounced query hooks.
+- Enforce dirty-state navigation guard and explicit discard/submit flows.
+- Keep field components reusable and accessibility-compliant by default.
+
+## 8.2 Folder Structure
+
+```text
+libs/
+  ui-responsive/
+    src/
+      forms/
+        text-field.component.tsx
+        select-field.component.tsx
+        form-error-summary.component.tsx
+
+  ui-desktop/
+    src/
+      forms/
+        desktop-date-time-field.component.tsx
+        desktop-multi-select.component.tsx
+        desktop-form-section.component.tsx
+
+  features/
+    checkin/
+      src/
+        forms/
+          passenger-checkin.form.tsx
+          passenger-checkin.schema.ts
+          passenger-checkin.defaults.ts
+        hooks/
+          use-passenger-checkin-form.hook.ts
+        guards/
+          unsaved-changes.guard.ts
+```
 
 ---
 
@@ -161,6 +294,41 @@ Implementation guidance:
 
 All denied actions must be logged with audit-safe metadata.
 
+## 9.3 Implementation Guidelines
+- Resolve permissions once at session bootstrap and refresh on context change.
+- Use composable guards: route guard + action guard + field guard.
+- Keep authorization checks in shared auth lib; do not duplicate in features.
+- Denied actions must emit audit-safe event with `userId`, `role`, `action`, `context`.
+- Render fallback UX consistently (`hidden`, `disabled`, or `read-only`) per policy.
+
+## 9.4 Folder Structure
+
+```text
+libs/
+  auth/
+    src/
+      authorization/
+        permission-resolver.ts
+        rbac-engine.ts
+        abac-engine.ts
+        permission.types.ts
+      guards/
+        route.guard.tsx
+        action.guard.tsx
+        field.guard.tsx
+      hooks/
+        use-permission.hook.ts
+        use-role-context.hook.ts
+
+  features/
+    boarding/
+      src/
+        permissions/
+          boarding.permission-map.ts
+        components/
+          boarding-action-bar.component.tsx
+```
+
 ---
 
 ## 10. Keyboard Workflow Support
@@ -175,6 +343,40 @@ All denied actions must be logged with audit-safe metadata.
 - Shortcut registry versioned per release
 - Conflict detection required in CI checks
 - Accessibility parity with screen reader and focus management
+
+## 10.3 Implementation Guidelines
+- Maintain a centralized shortcut registry with domain namespaces.
+- Register global shortcuts in shell; register domain shortcuts on route mount.
+- Validate collisions in CI using a static registry checker.
+- Provide command palette fallback for discoverability.
+- Disable or remap conflicting shortcuts based on platform/browser restrictions.
+
+## 10.4 Folder Structure
+
+```text
+apps/
+  desktop-shell/
+    src/
+      keyboard/
+        shortcut-registry.ts             # source of truth for shortcuts
+        shortcut-resolver.ts             # collision/precedence rules
+        global-shortcuts.ts              # shell-level shortcuts
+        command-palette.service.ts
+
+libs/
+  features/
+    flights/
+      src/
+        keyboard/
+          flights-shortcuts.ts           # domain-specific shortcuts
+          use-flights-shortcuts.hook.ts
+
+  ui-desktop/
+    src/
+      keyboard/
+        shortcut-hint.component.tsx
+        command-palette.component.tsx
+```
 
 ---
 
@@ -204,14 +406,14 @@ All denied actions must be logged with audit-safe metadata.
 
 ## 13. Option Selection Matrix
 
-| Criterion | Option A: React Native Web | Option B: React |
-|---|---|---|
-| Mobile UI reuse | Excellent | Moderate |
-| Desktop UX depth | Moderate | Excellent |
-| Grid ecosystem flexibility | Moderate | Excellent |
-| Keyboard workflow customization | Good | Excellent |
-| Team skill alignment (web-heavy) | Moderate | Excellent |
-| Long-term unified UI strategy | Excellent | Good |
+| Criterion                        | Option A: React Native Web | Option B: React |
+|----------------------------------|----------------------------|-----------------|
+| Mobile UI reuse                  | Excellent                  | Moderate |
+| Desktop UX depth                 | Moderate                   | Excellent |
+| Grid ecosystem flexibility       | Moderate                   | Excellent |
+| Keyboard workflow customization  | Good                       | Excellent |
+| Team skill alignment (web-heavy) | Moderate                   | Excellent |
+| Long-term unified UI strategy    | Excellent                  | Good |
 
 **Recommended approach:**
 - Start with **Option A** for reuse-driven programs.
