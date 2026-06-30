@@ -65,6 +65,127 @@ airline-platform/
 
 ---
 
+### Developer Component Usage Map
+**Purpose**: Single-page reference answering "What do I use, and where do I write it?" — covers every common developer task across the platform.
+
+```text
+╔══════════════════════════════════════════════════════════════════════════════════════╗
+║                       DEVELOPER COMPONENT USAGE MAP                                 ║
+║          "What should I use / where should I write this?"                            ║
+╚══════════════════════════════════════════════════════════════════════════════════════╝
+
+┌────────────────────────────────────┬──────────────────────────────────────────────────┐
+│  DEVELOPER TASK                    │  WRITE IN / USE FROM                             │
+├────────────────────────────────────┼──────────────────────────────────────────────────┤
+│  Build a domain screen             │  libs/features/{domain}/src/screens/             │
+│  Domain-specific component         │  libs/features/{domain}/src/components/          │
+│  Business logic hook               │  libs/features/{domain}/src/hooks/               │
+│  Redux slice / selectors           │  libs/features/{domain}/src/state/               │
+│  Call BFF API                      │  libs/features/{domain}/src/services/ + libs/sdk/│
+│  Data model mapper                 │  libs/features/{domain}/src/mappers/             │
+│  Reusable UI (mobile + desktop)    │  libs/ui-responsive/src/components/              │
+│  Native hardware UI wrapper        │  libs/ui-native/src/                             │
+│  Access native capability          │  libs/native-capabilities/src/public-api/hooks/  │
+│  Auth / permission check           │  libs/auth/src/hooks/use-permission.hook.ts      │
+│  Realtime event subscription       │  libs/realtime/                                  │
+│  Emit analytics / telemetry        │  libs/analytics/ (platform SDK — do not re-impl) │
+│  Navigate cross-domain             │  libs/navigation-contracts/ (route registry)     │
+│  Offline persistent data           │  Realm via libs/offline/                         │
+│  Feature flag evaluation           │  libs/shared/ feature flag hook (from platform)  │
+│  i18n / locale                     │  libs/shared/ i18n hook (i18next)                │
+│  AI integration                    │  libs/ai/ (AI Gateway client)                    │
+└────────────────────────────────────┴──────────────────────────────────────────────────┘
+
+╔══════════════════════════════════════════════════════════════════════════════════════╗
+║  FEATURE SCREEN COMPOSITION FLOW  (Boarding example)                                ║
+╚══════════════════════════════════════════════════════════════════════════════════════╝
+
+  boarding-list.screen.tsx  [libs/features/boarding/src/screens/]
+    │
+    ├──[state]────→  useBoardingList()  [libs/features/boarding/hooks/]
+    │                  ├── TanStack Query ──→ BoardingApiService ──→ libs/sdk/ ──→ BFF
+    │                  └── Redux selector ──→ boarding.slice ──→ Redux Store
+    │
+    ├──[layout]───→  ResponsiveGrid  [libs/ui-responsive/src/components/]
+    │
+    ├──[feature]──→  BoardingCard  [libs/features/boarding/src/components/]
+    │                  └── StatusChip  [libs/ui-responsive/]
+    │
+    ├──[native]───→  CameraPreviewNative  [libs/ui-native/src/camera/]   ← hardware only
+    │                  └── useCameraCapture()  [libs/native-capabilities/public-api/hooks/]
+    │
+    └──[auth]─────→  usePermission('boarding:scan')  [libs/auth/]
+                       └── RBAC engine ──→ Show action / Hide action
+
+╔══════════════════════════════════════════════════════════════════════════════════════╗
+║  DATA FLOW — READ PATH                                                               ║
+╚══════════════════════════════════════════════════════════════════════════════════════╝
+
+  Feature hook (TanStack Query)
+    ──→ libs/sdk/ (OpenAPI generated client)
+        ──→ BFF /v1/{domain}/{resource}   [HTTP + correlationId + authToken]
+            ──→ Microservice response
+    ←── Typed DTO ←── Cached in TanStack Query (short TTL)
+    ←── Rendered in screen
+
+  Offline path:
+    ──→ Realm local store (AES-256 encrypted)
+    ←── Last-synced projection (read-only on device)
+
+╔══════════════════════════════════════════════════════════════════════════════════════╗
+║  DATA FLOW — WRITE PATH                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════════════╝
+
+  User action (e.g. boarding scan)
+    ──→ Feature hook mutation
+        ├── Write to Realm first  (write-ahead log)
+        └── SDK mutation call ──→ BFF ──→ Microservice
+                                    └── Publish Solace event
+                                          ├── Boarding subscriber  ──→ Update boarding state
+                                          ├── Audit subscriber     ──→ Immutable audit store
+                                          └── Notification sub.    ──→ FCM / APNS
+
+╔══════════════════════════════════════════════════════════════════════════════════════╗
+║  REALTIME EVENT FLOW                                                                 ║
+╚══════════════════════════════════════════════════════════════════════════════════════╝
+
+  Solace / BFF
+    ──→ WebSocket (Socket.io)  [libs/realtime/]
+        ──→ Event subscription hook  [domain-specific in libs/features/]
+            ──→ Redux dispatch  ──→ Global state update
+                ──→ Screen re-renders reactively
+
+╔══════════════════════════════════════════════════════════════════════════════════════╗
+║  CROSS-CUTTING CONCERNS  (Platform provides — feature teams must NOT re-implement)  ║
+╚══════════════════════════════════════════════════════════════════════════════════════╝
+
+  Every request automatically carries:
+    ├─ Auth Token         → libs/auth/       → attached to all SDK calls by interceptor
+    ├─ Correlation ID     → libs/analytics/  → propagated in BFF request headers
+    ├─ Distributed Trace  → OpenTelemetry    → auto-instrumented spans per screen/API call
+    ├─ Feature Flags      → Platform hook    → evaluated per airport / role / environment
+    ├─ Offline Support    → Realm + Queue    → transparent to feature code
+    ├─ Error Boundary     → Shell root + FeatureErrorBoundary wrapper per screen
+    ├─ RBAC Gate          → libs/auth/       → usePermission() / action guard
+    └─ Audit Emission     → libs/analytics/  → regulated actions emitted automatically
+
+╔══════════════════════════════════════════════════════════════════════════════════════╗
+║  DEPENDENCY DIRECTION RULES  (Nx boundary — violations fail CI)                     ║
+╚══════════════════════════════════════════════════════════════════════════════════════╝
+
+  features        ──→  ui-responsive                        ✔  allowed
+  features        ──→  ui-native                            ✔  allowed (hardware exception only)
+  features        ──→  native-capabilities/public-api       ✔  allowed (hooks only)
+  features        ──→  native-capabilities (internal)       ✖  forbidden
+  features        ──→  apps/mobile-shell                    ✖  forbidden
+  ui-responsive   ──→  ui-native                            ✖  forbidden
+  ui-responsive   ──→  native-capabilities                  ✖  forbidden
+  ui-native       ──→  native-capabilities/public-api       ✔  allowed
+  any lib         ──→  apps/*                               ✖  forbidden
+```
+
+---
+
 ### TypeScript Structure Governance (`libs/features`, `libs/ui-responsive`, `libs/ui-native`)
 **Purpose**: Define exact TypeScript-level separation for screens, components, hooks, and state to keep modules scalable, testable, and platform-safe.
 

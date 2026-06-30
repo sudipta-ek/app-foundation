@@ -88,6 +88,32 @@ The BFF layer is responsible for **experience-facing composition** and **channel
 - Metrics per route/dependency/error class
 - Audit-safe action records for regulated workflows
 
+#### Metric Dimensions (Standard Label Set)
+
+All BFF metrics must carry these dimensions for consistent dashboards and alerting:
+
+| Dimension | Values |
+|---|---|
+| `service` | BFF application name (e.g. `bff-gateway`) |
+| `endpoint` | Route path pattern (e.g. `/v1/boarding/{id}`) |
+| `airport` | IATA airport code from `RequestContext` |
+| `channel` | `mobile` \| `desktop` |
+| `dependency` | Name of downstream service called |
+| `errorCode` | Stable error taxonomy code |
+| `userRole` | Resolved role from `RequestContext` |
+| `clientVersion` | Client app version from `RequestContext` |
+
+#### Standard Metric Names
+
+| Metric | Type | Description |
+|---|---|---|
+| `bff.request.duration` | Histogram | End-to-end BFF request latency per endpoint |
+| `bff.client.duration` | Histogram | Per-dependency downstream call latency |
+| `bff.cache.hit` | Counter | Cache hits per endpoint and dependency |
+| `bff.cache.miss` | Counter | Cache misses per endpoint and dependency |
+| `bff.retry.count` | Counter | Retry attempts per dependency |
+| `bff.circuitbreaker.open` | Gauge | Circuit breaker in OPEN state (1 = open, 0 = closed) |
+
 ## 3.10 Configuration & Feature Governance
 - Runtime config and feature flag evaluation
 - Airport-scoped behavior toggles
@@ -168,13 +194,17 @@ app-foundation/                              # Maven aggregator parent POM
                   DcsClient.java            # extends BaseServiceClient (bff-resilience-core)
                   OpsClient.java
                   CustomerClient.java
+              mappers/
+                PassengerMapper.java             # PassengerModel → mobile/desktop DTO
+                FlightMapper.java                # FlightModel → response DTO
+                BoardingMapper.java              # PassengerModel + FlightModel → BoardingPassDto
               errors/
                 ErrorCatalog.java
                 ErrorMapper.java
               observability/
                 TracingFilter.java
                 MetricsRegistry.java
-                LoggingPolicy.java
+                StructuredLoggingConfiguration.java  # structured JSON logging configuration
         main/resources/
           application.yml
           application-dev.yml
@@ -194,11 +224,21 @@ app-foundation/                              # Maven aggregator parent POM
 ```
 
 ### 6.1 Implementation Notes (JDK 21)
-- Prefer **Virtual Threads** for high-concurrency I/O workloads in aggregation flows where suitable.
 - Use `java.net.http` or enterprise-standard HTTP clients with connection pooling/timeouts.
 - Use Spring Security OAuth2 resource server support for token validation and scope enforcement.
 - Use Resilience4j (or enterprise equivalent) for circuit-breaker/retry/timeout patterns.
 - Keep package/module boundaries aligned to domain and capability ownership.
+
+#### Virtual Thread (VT) Guidance
+
+| Use Virtual Threads ✔ | Avoid Virtual Threads ✖ |
+|---|---|
+| Parallel downstream REST calls in Composers | CPU-intensive aggregation or transformation logic |
+| Blocking I/O in service client calls | `synchronized` blocks on shared mutable state |
+| Parallel database or cache reads | Code with `ThreadLocal` assumptions |
+| Aggregation requests with multiple blocking waits | Non-blocking reactive pipelines |
+
+Enable globally in Spring Boot 3.2+: `spring.threads.virtual.enabled=true`
 
 ---
 
@@ -246,7 +286,7 @@ libs/
       CircuitBreakerPolicy.java                # Resilience4j circuit breaker configuration
       IdempotencyStore.java                    # Idempotency key tracking for write endpoints
       BaseServiceClient.java                   # Abstract base: timeout + retry + CB + metrics + tracing
-      ClientPolicyRegistry.java                # Registry of per-dependency policy configurations
+      ServiceClientPolicyRegistry.java         # Registry of per-downstream-service policy configurations
 
   bff-caching-core/                            # Cache governance (depends: bff-context-core)
     src/main/java/com/airline/bff/caching/
@@ -390,6 +430,17 @@ Rules:
 - `maven-flatten-plugin` resolves `${revision}` in published POMs so artifacts are consumable without parent POM.
 - Individual patch releases for a single lib are allowed via a separate `<version>` override — requires ARB sign-off and a documented consumer impact assessment.
 
+### Platform BOM Governance
+
+| Rule | Detail |
+|---|---|
+| BOM ownership | Only Platform Team may modify `bff-platform-bom/pom.xml` |
+| Application constraint | Applications import `bff-platform-bom` only; never specify individual `bff-*` library versions directly |
+| Direct version prohibition | Specifying `<version>` for any `bff-*` library in an application POM is a build policy violation enforced by CI |
+| CI enforcement | Dependency validation step fails the build if any `bff-*` dependency carries a version outside the BOM |
+| BOM release cadence | BOM version increments follow platform release cadence; patch releases for critical security fixes only |
+| Consumer communication | BOM releases published to internal artifact registry with release notes; consuming apps must upgrade within agreed migration window |
+
 ### CODEOWNERS Pattern
 
 ```text
@@ -400,6 +451,207 @@ apps/bff-gateway/src/main/java/com/airline/bff/api/**           @domain-teams
 apps/bff-gateway/src/main/java/com/airline/bff/authorization/**  @domain-teams @platform-team
 apps/**                   @domain-teams @platform-team
 ```
+
+---
+
+## 6.4 Dependency Injection Rules
+
+Architecture dependency direction — enforced via ArchUnit tests in CI:
+
+```text
+api/ (Controllers)
+  → composition/ (Composers)
+    → integrations/services/ (Service Clients)
+    → mappers/
+    → dto/
+
+authorization/
+  → bff-auth-core (library)
+
+integrations/services/
+  → BaseServiceClient (bff-resilience-core library)
+
+dto/         ← no dependencies (pure data carriers)
+errors/      ← no domain dependencies (shared utility)
+```
+
+Rules:
+- **Controllers → Composers only.** Controllers never call service clients, mappers, or downstream services directly.
+- **Composers → Service Clients + Mappers + DTOs.** A Composer must never call another Composer.
+- **Service Clients → `BaseServiceClient` only** for resilience behavior. No REST calls outside the client class.
+- **DTOs have no dependencies** on any other BFF package.
+- **Dependency violations are detected by ArchUnit** architecture tests run as part of the CI build gate.
+
+---
+
+## 6.5 Composition Pattern
+
+```text
+Controller
+  → Composer (orchestrate, aggregate, normalize, map)
+    → [VT] ServiceClient.callA()   — parallel where independent
+    → [VT] ServiceClient.callB()
+    ← Canonical domain models
+    → Mapper.toDto(model1, model2)
+    ← DTO
+  → HTTP Response (standard envelope)
+```
+
+**Composer responsibilities ✔**
+- Orchestrate parallel or sequential downstream calls
+- Aggregate results from multiple service clients
+- Normalize response shapes across services
+- Delegate all DTO mapping to dedicated Mapper classes
+
+**Composer must NOT ✖**
+- Contain business rules or domain logic
+- Persist data or own transactions
+- Call another Composer
+- Call downstream REST directly (always via typed Client interface)
+
+> `composition/` is the correct name when the primary responsibility is API aggregation and response shaping. Rename to `orchestration/` only if classes evolve to coordinate multi-step stateful workflows.
+
+---
+
+## 6.6 Service Client Standards
+
+Each downstream service has exactly one typed client interface:
+
+```java
+// One client per service — typed interface — canonical models only
+interface PassengerClient {
+    PassengerModel getPassenger(String passengerId, RequestContext ctx);
+}
+
+interface FlightClient {
+    FlightModel getFlight(String flightId, RequestContext ctx);
+}
+```
+
+Rules:
+- **One client interface per downstream service** — no shared multi-service clients.
+- **No REST calls outside the client class.** HTTP calls are fully encapsulated within the client implementation.
+- **Retry, timeout, and circuit breaker live in `BaseServiceClient` only** — client implementations must not add resilience logic.
+- **Clients return canonical domain models** (`PassengerModel`, `FlightModel`), never DTOs.
+- **No business mapping inside client classes** — mapping is the responsibility of the Mapper layer.
+- All clients are registered in `ServiceClientPolicyRegistry` with per-service policy configuration.
+
+---
+
+## 6.7 DTO Governance
+
+All BFF response DTOs must comply with:
+
+| Rule | Detail |
+|---|---|
+| Immutable | Use Java records — no setters, no mutation after construction |
+| Java records preferred | `record BoardingPassDto(...) {}` over class |
+| No JPA annotations | DTOs are not persistence entities; no `@Entity`, `@Column`, etc. |
+| No validation logic | Validation annotations (`@NotNull` etc.) on request input DTOs only; response DTOs are annotation-free |
+| No business methods | DTOs carry data only — no domain logic, no computed fields with business meaning |
+| No downstream entity reuse | Never expose internal domain entities, JPA entities, or downstream API models as API response |
+
+```java
+// Correct — Java record response DTO
+public record BoardingPassDto(
+    String passengerId,
+    String flightNumber,
+    String seatNumber,
+    String boardingGroup,
+    String gate
+) {}
+```
+
+---
+
+## 6.8 Mapping Layer
+
+Mappers translate canonical service models into client-facing DTOs. Isolating mapping from Composers keeps Composers lean and makes mapping independently unit-testable.
+
+```text
+com/airline/bff/mappers/
+  PassengerMapper.java       # PassengerModel → PassengerDto
+  FlightMapper.java          # FlightModel → FlightDto
+  BoardingMapper.java        # PassengerModel + FlightModel → BoardingPassDto
+```
+
+Rules:
+- **Mappers are pure functions** — no I/O, no side effects, no shared state.
+- **One mapper per domain concept or DTO family.**
+- Mappers are **unit-tested independently** of Composers and Controllers.
+- Mappers may accept **multiple canonical models** when a DTO aggregates data from multiple services (e.g., `BoardingMapper` accepts `PassengerModel` + `FlightModel`).
+- **Mapping logic must not contain business rules.** Domain conditions belong in domain services, not mappers.
+
+---
+
+## 6.9 OpenAPI Generation Flow
+
+```text
+OpenAPI spec (bff-mobile.v1.yaml / bff-desktop.v1.yaml)
+  ↓ openapi-generator-maven-plugin (build phase)
+Generated request/response DTOs       → src/main/generated/
+Generated downstream client stubs     → src/main/generated/ (from service-published specs)
+  ↓
+Composition layer consumes generated types
+  ↓
+Controller implements generated API interface
+```
+
+Rules:
+- Generated sources live in `src/main/generated/` and are **excluded from manual editing**.
+- Downstream service client stubs are generated from service-published OpenAPI specs where available.
+- Manual DTO additions are prohibited when a generated equivalent exists.
+- Generation is a **build-time step gated in CI** — build fails if spec and generated code diverge.
+- Generated DTOs may be consumed by mappers but must never be modified in-place.
+
+---
+
+## 6.10 Request Flow Sequence Diagram
+
+```text
+Mobile Client
+  ─→ BoardingController.getBoarding(passengerId)
+       ─→ BoardingComposer.compose(passengerId, requestContext)
+            ─→ [VT] PassengerClient.getPassenger(passengerId, ctx)
+            ─→ [VT] FlightClient.getFlight(flightId, ctx)
+            ←─ PassengerModel
+            ←─ FlightModel
+            ─→ BoardingMapper.toDto(passengerModel, flightModel)
+            ←─ BoardingPassDto
+       ←─ BoardingPassDto
+  ←─ HTTP 200 { data: BoardingPassDto, correlationId, meta }
+```
+
+Sequence rules:
+- Controller always returns the standard response envelope (`data`, `meta`, `errors`, `correlationId`).
+- Parallel downstream calls are coordinated inside the Composer using Virtual Threads (`[VT]`).
+- No domain models or downstream entities cross the Controller boundary — DTOs only.
+- `correlationId` and `traceId` from `RequestContext` are included in every response envelope.
+
+---
+
+## 6.11 Configuration Hierarchy
+
+Runtime configuration is resolved in strict precedence order (highest → lowest):
+
+```text
+Vault                         ← secrets: credentials, keys, tokens  (highest priority)
+  ↓
+Environment variables         ← container/platform-injected config
+  ↓
+application-{env}.yml         ← environment-specific overrides (prod / uat / sit / dev)
+  ↓
+application.yml               ← shared defaults
+  ↓
+Compiled defaults              ← code-level defaults                  (lowest priority)
+```
+
+Rules:
+- **Secrets must come from Vault only.** Credentials, tokens, or keys in any yml file is a security policy violation.
+- **Environment-specific overrides** live in `application-{env}.yml`; shared config in `application.yml`.
+- **No hardcoded config values** in Java source code.
+- Configuration model classes use `@ConfigurationProperties` with typed, validated POJOs.
+- **Production config changes require four-eye approval** workflow before deployment.
 
 ---
 
@@ -735,3 +987,72 @@ Split into multiple deployables only when justified by:
 | ADR-105 | Resilience4j standard for retry/timeout/circuit-breaker | Proposed |
 | ADR-106 | Cross-cutting BFF capabilities extracted as non-deployable shared library modules | Proposed |
 | ADR-107 | Single monorepo (libs + apps) adopted; evolve to dedicated libs repo on explicit trigger criteria | Proposed |
+| ADR-108 | Platform BOM is the sole library version management mechanism; direct version specification prohibited | Proposed |
+| ADR-109 | Extension point plugin contract defined for AI, Offline, Payments, Vision, IoT future capabilities | Proposed |
+
+---
+
+## 16. Non-Functional Requirements
+
+| NFR | Target | Notes |
+|---|---|---|
+| Availability | 99.95% monthly | Multi-AZ deployment; no single point of failure |
+| Horizontal scalability | Stateless BFF instances | No in-process session or request state between requests |
+| Zero-downtime deployments | Required | Rolling or blue/green; `maxUnavailable: 0` |
+| Graceful shutdown | Required | Connection draining; 30 sec default grace period |
+| Startup time | < 10 sec | Spring Boot optimized; GraalVM Native Image considered for sub-5s targets |
+| Memory (steady state) | < 512 MB heap | JVM ergonomics tuned for container; G1GC or ZGC recommended |
+| CPU (average utilization) | < 30% per core | Burst to 80% permitted under peak load |
+| P95 latency | < 400ms | See performance budget decomposition (Section 9.1) |
+| RTO | < 5 min | Automated health-check restart; autoscaling group failover |
+| RPO | N/A | BFF is stateless; no persistent state; no data loss exposure |
+
+#### Horizontal Scalability Rules
+- BFF instances must be **completely stateless** — no in-process session or request state stored between requests.
+- `RequestContext` is request-scoped and propagated via Virtual Thread carrier context, not static `ThreadLocal`.
+- External cache (Redis / distributed cache) is used for any cross-request state (idempotency store, response cache).
+- All configuration is externally sourced (Vault + environment variables); no per-instance config drift.
+
+#### Zero-Downtime Deployment Requirements
+- Kubernetes rolling update: `maxUnavailable: 0`, `maxSurge: 1`.
+- Readiness probe returns healthy only after full startup (route registration complete, downstream health verified).
+- Graceful shutdown sequence: stop accepting new connections → drain in-flight requests → release resources.
+- Contract-compatible (non-breaking) changes only on rolling deployments; breaking changes require blue/green with an explicit migration window.
+
+---
+
+## 17. Extension Point Strategy
+
+Future capabilities are isolated as independently adoptable extension modules. Extensions follow a typed plugin contract and must not modify core BFF framework code.
+
+#### Extension Plugin Contract
+
+```java
+public interface BffExtension {
+    String extensionId();                          // stable unique identifier
+    void register(BffExtensionRegistry registry);  // register capabilities and hooks
+    void onStartup(ApplicationContext ctx);         // post-startup initialization
+    void onShutdown();                             // graceful cleanup
+}
+```
+
+Extensions are registered via Spring `@Bean` discovery and loaded by `BffExtensionRegistry` at startup.
+
+#### Planned Extension Modules
+
+```text
+extensions/
+  ai/              # AI inference, recommendation, and decision support hooks
+  offline/         # Offline data sync contracts and mutation queue management
+  notifications/   # Advanced notification routing and template management
+  payments/        # Payment gateway integration hooks (PCI scope — isolated module)
+  vision/          # Webcam, barcode, and MRZ scanning integration
+  iot/             # IoT device event ingestion and command bridge
+```
+
+#### Governance Rules
+- Extensions are isolated Maven modules; core BFF depends only on extension API interfaces.
+- Extensions must not modify `RequestContext` fields after population by `bff-context-core`.
+- PCI-scoped extensions (`payments/`) run in an isolated module with restricted dependency access and a separate security review gate.
+- Each extension module ships its own test suite and publishes a compatibility matrix against the BFF platform version.
+- Extension registration and lifecycle events emit telemetry for observability coverage.
