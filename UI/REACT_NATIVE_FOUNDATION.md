@@ -1059,8 +1059,7 @@ Recovery process triggered
 
 **Sources:**
 - Azure Key Vault (primary for Azure-hosted environments)
-- AWS Secrets Manager (for AWS-hosted services)
-- HashiCorp Vault (multi-cloud / on-premise)
+- HashiCorp Vault  (AWS cloud) - > Sync to on-prem Openshift Vault cluster
 
 **Capabilities:**
 - Secret rotation (automated, zero-downtime)
