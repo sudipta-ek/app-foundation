@@ -67,9 +67,14 @@ The BFF layer is responsible for **experience-facing composition** and **channel
 - Correlation propagation: `correlationId`, `traceId`
 
 ## 3.6 Notification Orchestration
-- Trigger push workflows from domain events
-- Provider abstraction integration (FCM/APNS via notification service)
-- Priority/TTL/routing policy enforcement
+- Server-side audience resolution (session / role / airport / device token registry queries)
+- Provider HTTP integration (FCM HTTP v1 and APNS HTTP/2) with Vault-sourced credentials
+- Fan-out cap enforcement (10,000 token limit per dispatch; ARB gate for oversized batches)
+- Acknowledgement registry and per-policy suppression (`none` / `one-time` / `any-ack-suppresses-all` / `individual-ack`)
+- All orchestration, dispatch, and ack decisions emitted to the audit store via `bff-audit-core`
+- UI layer is responsible only for device token registration, notification handling, and calling the BFF `/v1/notifications/{id}/ack` endpoint
+
+> Push notification ownership model: [UI/RN_PUSH_NOTIFICATION_STRATEGY.md — Section 1.1](UI/RN_PUSH_NOTIFICATION_STRATEGY.md)
 
 ## 3.7 Resilience & Reliability
 - Per-dependency timeout budgets
@@ -160,7 +165,7 @@ app-foundation/                              # Maven aggregator parent POM
     bff-resilience-core/                     # Retry/timeout/circuit-breaker, BaseServiceClient
     bff-caching-core/                        # Cache policies, TTL governance, key conventions
     bff-events-core/                         # Solace publisher/subscriber abstractions
-    bff-notifications-core/                  # Notification orchestrator abstractions
+    bff-notifications-core/                  # Audience resolution, provider dispatch (FCM/APNS), ack registry
     bff-audit-core/                          # Audit emitter, PII-safe event mapper
   apps/                                      # deployable BFF applications
     bff-gateway/
@@ -298,9 +303,25 @@ libs/
       SolacePublisher.java                     # Publish events to Solace backbone
       SolaceSubscriber.java                    # Subscribe to Solace topic consumers
 
-  bff-notifications-core/                      # Notification abstractions (independent)
+  bff-notifications-core/                      # Notification orchestration (depends: bff-context-core)
     src/main/java/com/airline/bff/notifications/
-      NotificationOrchestrator.java            # Trigger and route push notification workflows
+      audience/
+        AudienceSpec.java                        # Sealed interface: 6 audience class variants
+        AudienceResolver.java                    # Resolves device token set for a given AudienceSpec
+        TokenRegistryClient.java                 # Queries token registry by session / role / airport
+        AudienceFanOutGuard.java                 # Enforces 10k token cap; routes oversized dispatch to ARB
+      dispatch/
+        NotificationOrchestrator.java            # Entry point: drives full audience resolve + dispatch flow
+        NotificationDispatcher.java              # Routes canonical payload to FCM or APNS provider client
+        FcmProviderClient.java                   # FCM HTTP v1 API integration
+        ApnsProviderClient.java                  # APNS HTTP/2 API integration
+        PayloadBuilder.java                      # Builds provider-specific payload from canonical request
+      acknowledgement/
+        AcknowledgementRegistry.java             # Server-side ack persistence (per-user, per-notification)
+        NotificationPolicyEvaluator.java         # Evaluates policy; suppresses pending sends on ack
+        AckRequest.java                          # Ack endpoint request model
+      config/
+        NotificationProviderConfig.java          # Vault-sourced FCM/APNS credentials; per-env isolation
 
   bff-audit-core/                              # Audit framework (depends: bff-context-core)
     src/main/java/com/airline/bff/audit/
@@ -317,10 +338,10 @@ bff-context-core                    ← no BFF library dependencies (foundation)
   ├── bff-auth-core
   ├── bff-resilience-core
   ├── bff-caching-core
+  ├── bff-notifications-core            ← depends: bff-context-core (AudienceResolver uses RequestContext)
   └── bff-audit-core
 
 bff-events-core                     ← independent (Solace abstractions only)
-bff-notifications-core              ← independent (notification abstractions only)
 
 bff-gateway (app)
   → bff-context-core

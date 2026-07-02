@@ -32,6 +32,7 @@ airline-platform/
 │   ├── sdk/                  # Generated OpenAPI SDK
 │   ├── auth/                 # Authentication logic
 │   ├── realtime/             # WebSocket + Event handling
+│   ├── notifications/        # Push notification handlers, token registration, ack, telemetry (UI layer)
 │   ├── analytics/            # Analytics SDK
 │   ├── ai/                   # AI Gateway client
 │   ├── offline/              # Offline & sync logic
@@ -760,12 +761,26 @@ React Native ↔ WebSocket Gateway → Event Bus (Solace) → BFF Services
 ### Layer 3: Push Notification Strategy
 **Purpose**: Notify users of critical updates
 
+> Detailed implementation guide: [UI/RN_PUSH_NOTIFICATION_STRATEGY.md](UI/RN_PUSH_NOTIFICATION_STRATEGY.md)
+
+**BFF vs UI Ownership:**
+
+| Concern | Layer | Location |
+|---|---|---|
+| FCM/APNS provider dispatch | **BFF** | `bff-notifications-core/dispatch/` |
+| Audience resolution & token registry | **BFF** | `bff-notifications-core/audience/` |
+| Acknowledgement registry & suppression | **BFF** | `bff-notifications-core/acknowledgement/` |
+| Device token registration | **UI** | `libs/notifications/registration/` |
+| Foreground / background / terminated handlers | **UI** | `libs/notifications/handlers/` |
+| Deep link routing from notification tap | **UI** | `libs/notifications/routing/` |
+| Client-side ack + local deduplication | **UI** | `libs/notifications/acknowledgement/` |
+| Notification preferences state | **UI** | `libs/notifications/preferences/` |
+| Notification type taxonomy | **Shared Contract** | `libs/notifications/taxonomy/` |
+
 **Architecture:**
 ```
-FCM/APNS
-├── Foreground: In-app notification
-├── Background: System notification
-└── Terminated: System notification + deep link
+BFF: Domain Event → NotificationOrchestrator → AudienceResolver → FCM/APNS provider
+UI:  Device push (OS) → Handler → PayloadValidator → AckStore → RouteGuard → Feature Screen
 ```
 
 **Notification Types:**
