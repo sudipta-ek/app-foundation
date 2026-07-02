@@ -340,6 +340,90 @@ airline-platform/
 
 ---
 
+### Feature Domain Governance — Sub-Domain & Flow Handling
+**Purpose**: Define how to structure complex domains with multiple flows, sub-features, and shared components — preventing monolithic domain libraries from becoming unnavigable.
+
+#### When to Create a Sub-Domain
+
+| Signal | Action |
+|--------|--------|
+| Domain has > 5 distinct user flows with separate entry points | Split into sub-domains |
+| Two flows have zero shared state, components, or services | Separate sub-domains |
+| A flow has its own team ownership independent of the parent domain | Separate sub-domain |
+| A flow is feature-flag-gated and may be fully removed | Separate sub-domain (clean removal) |
+| Flows share > 60% of components, state, and services | Keep as single domain with flow folders |
+
+**Rule**: Default is a single domain library. Sub-domains are an exception requiring justification, not a default partitioning strategy.
+
+#### Flow Handling Within a Domain
+
+```text
+libs/features/boarding/
+  src/
+    screens/
+      boarding-list.screen.tsx          # entry point — flight-level view
+      passenger-scan.screen.tsx          # scan flow screen
+      boarding-summary.screen.tsx        # closing summary screen
+    flows/                               # complex multi-step flows get a folder
+      group-boarding/                    # flow: board passengers by group
+        group-boarding.flow.tsx          # wizard/stepper orchestrator
+        group-boarding.state.ts          # flow-local ephemeral state (not in slice)
+        steps/
+          select-group.step.tsx
+          confirm-group.step.tsx
+          group-result.step.tsx
+      manual-override/                   # flow: supervisor manual override
+        manual-override.flow.tsx
+        steps/
+          reason-selection.step.tsx
+          confirmation.step.tsx
+```
+
+**Flow state rules:**
+- Wizard/stepper flow state is **ephemeral** — stored in local `useState` or a flow-scoped context, not in Redux slice.
+- When the flow completes or is cancelled, ephemeral state is discarded.
+- The outcome of the flow (e.g., boarding record created) goes to Redux and triggers API mutation.
+- Never put multi-step form draft state in Redux; it pollutes global state and complicates selectors.
+
+#### Sub-Domain Structure
+
+When a domain genuinely needs to split:
+
+```text
+libs/features/
+  checkin/                              # parent — shared state, types, services
+    src/
+      shared/
+        checkin.types.ts
+        checkin-api.service.ts
+  checkin-document-check/               # sub-domain — document verification flow
+    src/
+      screens/
+      hooks/
+      state/
+  checkin-seat-assignment/              # sub-domain — seat assignment flow
+    src/
+      screens/
+      hooks/
+      state/
+```
+
+#### Guardrails Under `features/{domain}`
+
+| Guardrail | Rule |
+|---|---|
+| Component placement | Feature-specific components in `components/`; flow-specific steps in `flows/{flow-name}/steps/` |
+| State scope | Global persistent state in `state/` (Redux slice); flow-local ephemeral state in flow component only |
+| Service calls | All BFF calls in `services/`; hooks call services — screens never call services directly |
+| Cross-domain imports | Forbidden — use `libs/navigation-contracts/` for navigation, Solace/Redux for data sharing |
+| Shared within domain | Shared utilities, types, and services in `shared/` folder within the domain |
+| Screen ownership | One screen = one purpose; no screen handles two unrelated flows |
+| Mapper location | `mappers/` folder — screens and hooks must never contain inline transformation logic |
+| Test colocation | `__tests__/` folder adjacent to the code being tested — not in a top-level test folder |
+| Index barrel | Every domain exports only its public surface via `index.ts` — no deep imports from other libs |
+
+---
+
 ### Design System Governance
 **Purpose**: Single source of truth for UI across React Native and React Desktop
 
@@ -764,6 +848,8 @@ Dev → SIT → UAT → PreProd → Prod
 ### Layer 8: Comprehensive Testing Pyramid
 **Purpose**: Ensure quality at all levels
 
+> **Detailed implementation guide**: [UI/RN_TESTING_PYRAMID.md](UI/RN_TESTING_PYRAMID.md)
+
 **Testing Levels:**
 - Unit Tests (Jest): 50%
 - Component Tests (React Testing Library): 30%
@@ -896,6 +982,98 @@ Microservices
 
 ---
 
+### Cross-Cutting: Error Handling & Retry Framework
+**Purpose**: Define consistent error classification, user-facing recovery UX, and retry behaviour across all platform layers.
+
+**Error Taxonomy:**
+
+| Class | Examples | User Impact | Recovery |
+|---|---|---|---|
+| Network / Transient | Timeout, connection reset, 503 | Retry prompt | Auto-retry (exponential backoff) |
+| Auth | 401 token expired, 403 forbidden | Re-login or access denied | Silent token refresh → retry; hard fail → re-login |
+| Validation | 400 bad request, field errors | Inline form errors | User corrects and resubmits |
+| Business Conflict | 409 (already boarded, seat taken) | Contextual message | User resolves conflict |
+| Dependency Failure | Upstream service 500, downstream timeout | Partial screen failure | Retry with circuit breaker backoff |
+| Offline | No network | Offline banner; writes blocked | Reconnect and sync |
+| Fatal / Crash | Unhandled exception, corrupt state | Full error screen | Reload or re-login |
+
+**Error Boundary Hierarchy (React Native):**
+
+```text
+AppErrorBoundary (apps/mobile-shell)         ← catches all unhandled — full error screen
+  StackErrorBoundary (per navigation stack)  ← catches stack-level errors
+    ScreenErrorBoundary (feature screens)    ← catches screen errors + retry action
+      FeatureErrorBoundary (widgets/grids)   ← inline fallback without disrupting screen
+```
+
+**Retry Strategy:**
+
+```typescript
+// libs/shared/src/retry/retry.policy.ts
+export const DEFAULT_RETRY_POLICY = {
+  maxAttempts: 3,
+  initialDelayMs: 300,
+  backoffFactor: 2,            // 300ms → 600ms → 1200ms
+  jitterMs: 100,               // prevent thundering herd
+  retryOn: [408, 429, 500, 502, 503, 504],
+  doNotRetryOn: [400, 401, 403, 404, 409],
+};
+```
+
+**Layer-by-Layer Application:**
+
+| Layer | Error Handling Responsibility |
+|---|---|
+| `libs/sdk/` (API client) | HTTP interceptor: auto-retry transient errors, token refresh on 401 |
+| `libs/features/*/hooks/` | TanStack Query `retry` option; map API errors to user-facing state |
+| `libs/features/*/screens/` | Render error state from hook; call `ScreenErrorBoundary` fallback |
+| `libs/realtime/` | WebSocket reconnect with exponential backoff; dead-letter queue for missed events |
+| `libs/offline/` | Realm write failures go to dead-letter queue; retry on sync restore |
+| `libs/audit/` | Offline buffer — audit events never dropped; retried on reconnect |
+| BFF (`bff-resilience-core`) | Resilience4j: circuit breaker + retry + timeout per downstream dependency |
+
+**Correlation ID in Errors:**
+- Every user-facing error screen must surface `correlationId`.
+- Error reports to observability include `correlationId` + `traceId`.
+- Support diagnostic panel filterable by `correlationId`.
+
+---
+
+### Cross-Cutting: API Client Abstraction
+**Purpose**: Consolidate where API integration lives — preventing scattered HTTP calls across the codebase.
+
+**Coverage Map:**
+
+| Area | Where It Lives | What It Does |
+|---|---|---|
+| Generated API client | `libs/sdk/src/generated/` | OpenAPI-generated TypeScript client (types + HTTP calls) |
+| SDK interceptors | `libs/sdk/src/interceptors/` | Auth token injection, correlation ID header, retry policy, response normalisation |
+| Feature API service | `libs/features/{domain}/src/services/` | Domain-specific BFF call wrappers (thin, typed, mappers called here) |
+| Feature query hook | `libs/features/{domain}/src/hooks/` | TanStack Query `useQuery` / `useMutation` — the only thing screens call |
+| BFF base client | `bff-resilience-core / BaseServiceClient.java` | Downstream service call base: timeout + retry + CB + tracing + metrics |
+
+**Interceptor Chain (mobile SDK):**
+
+```text
+TanStack Query mutation/query
+  → libs/features/*/services/*.service.ts (typed wrapper)
+      → libs/sdk/src/generated/BoardingApi.ts (generated client)
+          → Axios instance with interceptors:
+              ├─ Auth interceptor: attach Bearer token
+              ├─ Correlation interceptor: attach X-Correlation-ID + traceparent
+              ├─ Retry interceptor: exponential backoff on transient errors
+              ├─ Error normaliser: map HTTP errors to typed AppError
+              └─ Offline guard: reject immediately if no network
+```
+
+Rules:
+- **Feature code never calls `Axios` or `fetch` directly** — only the generated SDK or service wrappers.
+- **No BFF URL hardcoded in feature code** — all base URLs from runtime config service.
+- **Error normalisation happens once** in the SDK interceptor — feature hooks receive typed `AppError`, not raw `AxiosError`.
+- **All SDK calls carry `correlationId` and `traceId`** — injected by interceptor, not by feature code.
+
+---
+
 ### Layer 14: Airport Configuration Framework
 **Purpose**: Support airport-specific operational configuration without code changes, enabling multi-airport deployments (DXB, LHR, JFK, SIN, CDG, etc.)
 
@@ -930,6 +1108,8 @@ App Runtime
 
 ### Layer 15: Audit Architecture
 **Purpose**: Provide immutable, traceable audit records for all operational actions — mandatory for airline regulatory compliance
+
+> **Detailed implementation guide** (including Logging & Analytics Hooks): [UI/RN_AUDIT_ARCHITECTURE.md](UI/RN_AUDIT_ARCHITECTURE.md)
 
 **Audit Events:**
 - Login / Logout
@@ -1050,6 +1230,8 @@ Recovery process triggered
 ### Layer 18: Enterprise Secrets Management
 **Purpose**: Centralised, audited management of API keys, certificates, and sensitive configuration — never hardcoded in app or repository
 
+> **Detailed implementation guide** (iOS Keychain, Android Keystore, biometric key protection, certificate pinning, secret rotation): [UI/RN_SECRETS_MANAGEMENT.md](UI/RN_SECRETS_MANAGEMENT.md)
+
 **Secret Types:**
 - API Keys (BFF, third-party services)
 - TLS/SSL Certificates
@@ -1077,6 +1259,8 @@ Recovery process triggered
 
 ### Layer 19: CI/CD Pipeline Architecture
 **Purpose**: Enforce quality gates, automate builds, and enable safe, repeatable releases across all environments
+
+> **Detailed implementation guide** (Nx affected builds, Fastlane lanes, Bitrise config, quality gates, environment promotion, secret injection, rollback): [UI/RN_CICD_PIPELINE.md](UI/RN_CICD_PIPELINE.md)
 
 **Pipeline Stages:**
 ```
@@ -1204,6 +1388,8 @@ Deploy (Dev → SIT → UAT → PreProd → Prod)
 
 ### Layer 23: Navigation Architecture
 **Purpose**: Govern navigation structure, deep linking, and route ownership across modular domains — preventing tight coupling between domain libraries through uncontrolled navigation calls
+
+> **Detailed implementation guide** (typed route contracts, route registry, cross-domain navigation service, deep link cold/warm start, guards, feature flag routing): [UI/RN_NAVIGATION_ARCHITECTURE.md](UI/RN_NAVIGATION_ARCHITECTURE.md)
 
 **Root Navigator Structure:**
 ```
